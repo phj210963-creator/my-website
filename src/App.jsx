@@ -45,31 +45,46 @@ const money = cents => `HK$ ${(Number(cents || 0) / 100).toFixed(2)}`
 const clean = obj => Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== '' && v !== null && v !== undefined))
 
 function Login() {
-  const [mode, setMode] = useState('login')
-  const [form, setForm] = useState({ email: '', password: '', name: '' })
+  const [form, setForm] = useState({ email: '', password: '' })
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   async function submit(e) {
     e.preventDefault(); setBusy(true); setMessage('')
-    const result = mode === 'login'
-      ? await supabase.auth.signInWithPassword({ email: form.email, password: form.password })
-      : await supabase.auth.signUp({ email: form.email, password: form.password, options: { data: { full_name: form.name } } })
+    const result = await supabase.auth.signInWithPassword({ email: form.email, password: form.password })
     setBusy(false)
     if (result.error) setMessage(result.error.message)
-    else if (mode === 'signup' && !result.data.session) setMessage('帳戶已建立，請查收確認電郵。')
+    else sessionStorage.setItem('eventflow_authenticated', '1')
   }
   return <div className="auth-page"><section className="auth-card">
     <div className="auth-brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span></div>
-    <h1>{mode === 'login' ? '歡迎回來' : '建立帳戶'}</h1><p>登入後管理活動、會員、報名、點名與付款。</p>
+    <h1>後台登入</h1><p>程式管理員及 User 請使用獲邀請的電郵帳戶登入。</p>
     <form onSubmit={submit}>
-      {mode === 'signup' && <label>姓名<input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}/></label>}
       <label>電郵<input required type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}/></label>
       <label>密碼<input required minLength="8" type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}/></label>
       {message && <div className="form-message">{message}</div>}
-      <button className="primary wide" disabled={busy}>{busy ? '處理中…' : mode === 'login' ? '登入' : '註冊'}</button>
+      <button className="primary wide" disabled={busy}>{busy ? '登入中…' : '登入'}</button>
     </form>
-    <button className="switch-auth" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>{mode === 'login' ? '未有帳戶？立即註冊' : '已有帳戶？返回登入'}</button>
+    <small className="privacy-note">新後台用戶必須由程式管理員發出邀請，並透過邀請連結自行設定密碼。</small>
   </section></div>
+}
+
+function InvitationSignup({ token }) {
+  const [invite, setInvite] = useState(null)
+  const [form, setForm] = useState({ full_name:'', password:'', confirm:'' })
+  const [state, setState] = useState({ loading:true, busy:false, error:'', done:false })
+  useEffect(()=>{ supabase.rpc('get_user_invitation',{invitation_token:token}).then(({data,error})=>{
+    const row=data?.[0]; setInvite(row||null); setForm(f=>({...f,full_name:row?.full_name||''})); setState(s=>({...s,loading:false,error:error?.message||(!row?'邀請連結無效或已過期。':'')}))
+  }) },[token])
+  async function submit(e) {
+    e.preventDefault()
+    if(form.password!==form.confirm) return setState(s=>({...s,error:'兩次輸入的密碼不相同。'}))
+    setState(s=>({...s,busy:true,error:''}))
+    const {error}=await supabase.auth.signUp({email:invite.email,password:form.password,options:{data:{full_name:form.full_name}}})
+    if(error) setState(s=>({...s,busy:false,error:error.message}))
+    else { sessionStorage.setItem('eventflow_authenticated','1'); setState(s=>({...s,busy:false,done:true})) }
+  }
+  if(state.loading)return <div className="loading-page">正在驗證邀請…</div>
+  return <div className="auth-page"><section className="auth-card"><div className="auth-brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span></div>{state.done?<><h1>帳戶已建立</h1><p>如系統要求確認電郵，請先完成確認，然後返回登入。</p><a className="primary link-button" href="/">返回登入</a></>:<><h1>接受後台邀請</h1>{invite&&<p>{invite.email} · {invite.role==='admin'?'程式管理員':'User'}</p>}<form onSubmit={submit}><Input label="姓名" required value={form.full_name} onChange={v=>setForm(f=>({...f,full_name:v}))}/><Input label="自行設定密碼" type="password" required value={form.password} onChange={v=>setForm(f=>({...f,password:v}))}/><Input label="再次輸入密碼" type="password" required value={form.confirm} onChange={v=>setForm(f=>({...f,confirm:v}))}/>{state.error&&<div className="form-message">{state.error}</div>}<button className="primary wide" disabled={!invite||state.busy}>{state.busy?'建立中…':'建立帳戶'}</button></form></>}</section></div>
 }
 
 function PublicRegistration({ slug }) {
@@ -128,11 +143,12 @@ function PublicRegistration({ slug }) {
 
 function Sidebar({ open, close, active, setActive, profile }) {
   const initials = (profile?.full_name || profile?.email || 'U').slice(0, 2).toUpperCase()
+  const visibleItems = navItems.filter(([,label]) => label !== '用戶及權限' || profile?.role === 'admin')
   return <><button className={`scrim ${open ? 'show' : ''}`} onClick={close}/>
     <aside className={`sidebar ${open ? 'open' : ''}`}>
       <div className="brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span><button className="mobile-close" onClick={close}><X size={20}/></button></div>
-      <nav>{navItems.map(([Icon, label]) => <button key={label} className={active === label ? 'active' : ''} onClick={() => { setActive(label); close() }}><Icon size={19}/><span>{label}</span></button>)}</nav>
-      <div className="profile"><p>目前權限</p><span className="role">{profile?.role || 'member'}</span><div className="profile-row"><span className="avatar">{initials}</span><span><b>{profile?.full_name || 'EventFlow 用戶'}</b><small>{profile?.email}</small></span></div><button className="logout" onClick={() => supabase.auth.signOut()}><LogOut size={17}/>登出</button></div>
+      <nav>{visibleItems.map(([Icon, label]) => <button key={label} className={active === label ? 'active' : ''} onClick={() => { setActive(label); close() }}><Icon size={19}/><span>{label}</span></button>)}</nav>
+      <div className="profile"><p>目前權限</p><span className="role">{profile?.role === 'admin' ? '程式管理員' : 'User'}</span><div className="profile-row"><span className="avatar">{initials}</span><span><b>{profile?.full_name || 'EventFlow 用戶'}</b><small>{profile?.email}</small></span></div><button className="logout" onClick={() => {sessionStorage.removeItem('eventflow_authenticated');supabase.auth.signOut()}}><LogOut size={17}/>登出</button></div>
     </aside></>
 }
 
@@ -363,6 +379,39 @@ function NoticePublisher({ data, user, refresh, notify }) {
   </div>
 }
 
+function UserAdministration({ data, user, refresh, notify }) {
+  const [inviteOpen,setInviteOpen]=useState(false), [editing,setEditing]=useState(null)
+  const [form,setForm]=useState({full_name:'',email:'',role:'staff'})
+  async function invite(e){
+    e.preventDefault()
+    const token=crypto.randomUUID()
+    const {error}=await supabase.from('user_invitations').insert({full_name:form.full_name,email:form.email.toLowerCase(),role:form.role,token,invited_by:user.id})
+    if(error)return notify(error.message,'error')
+    const link=`${location.origin}/?invite=${token}`, roleLabel=form.role==='admin'?'程式管理員':'User'
+    const subject='EventFlow 後台帳戶邀請'
+    const body=`${form.full_name}：\n\n你已獲邀成為 EventFlow 的「${roleLabel}」。請使用以下專屬連結，以 ${form.email} 作為登入名稱並自行設定密碼：\n\n${link}\n\n邀請連結有效期為 7 日。`
+    location.href=`mailto:${encodeURIComponent(form.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+    notify('邀請已建立，並已開啟邀請電郵'); setInviteOpen(false); setForm({full_name:'',email:'',role:'staff'})
+  }
+  async function saveUser(e){
+    e.preventDefault()
+    const {error}=await supabase.from('profiles').update({full_name:editing.full_name,role:editing.role,status:editing.status}).eq('id',editing.id)
+    if(error)notify(error.message,'error');else{notify('用戶資料已更新');setEditing(null);refresh()}
+  }
+  async function remove(profile){
+    if(profile.id===user.id)return notify('不能刪除自己的管理員帳戶','error')
+    if(!confirm(`確定刪除 ${profile.email} 的後台存取權？`))return
+    const {error}=await supabase.from('profiles').update({status:'inactive',role:'member'}).eq('id',profile.id)
+    if(error)notify(error.message,'error');else{notify('用戶存取權已刪除');refresh()}
+  }
+  return <div className="feature-page"><div className="feature-head"><div><p className="eyebrow">ACCESS CONTROL</p><h2>用戶及權限</h2><span>只有程式管理員可邀請、編輯及刪除後台用戶。</span></div><button className="primary" onClick={()=>setInviteOpen(true)}><Mail size={17}/>邀請用戶</button></div>
+    <div className="permission-cards"><article className="card"><ShieldCheck size={24}/><h3>程式管理員</h3><p>可使用所有功能，並管理、邀請及刪除用戶。</p></article><article className="card"><Users size={24}/><h3>User</h3><p>可進入所有營運功能，輸入及編輯資料，但不能管理用戶。</p></article><article className="card"><QrCode size={24}/><h3>會員參加者</h3><p>不建立後台帳戶，只能透過公開連結或 QR Code 報名。</p></article></div>
+    <article className="card directory-card"><div className="table-scroll"><table className="directory-table"><thead><tr><th>姓名</th><th>登入電郵</th><th>權限</th><th>狀態</th><th>操作</th></tr></thead><tbody>{data.profiles.filter(p=>['admin','staff'].includes(p.role)).map(p=><tr key={p.id}><td><b>{p.full_name||'—'}</b></td><td>{p.email}</td><td><span className="status">{p.role==='admin'?'程式管理員':'User'}</span></td><td>{p.status}</td><td><div className="row-buttons"><button title="編輯" onClick={()=>setEditing({...p})}><Pencil size={16}/></button><button title="刪除" className="danger" disabled={p.id===user.id} onClick={()=>remove(p)}><Trash2 size={16}/></button></div></td></tr>)}</tbody></table></div></article>
+    {inviteOpen&&<Modal title="邀請後台用戶" close={()=>setInviteOpen(false)}><form className="data-form" onSubmit={invite}><Input label="用戶姓名" required value={form.full_name} onChange={v=>setForm(f=>({...f,full_name:v}))}/><Input label="登入電郵（Username）" type="email" required value={form.email} onChange={v=>setForm(f=>({...f,email:v}))}/><Input label="權限" required value={form.role} onChange={v=>setForm(f=>({...f,role:v}))} options={[{value:'admin',label:'程式管理員'},{value:'staff',label:'User'}]}/><p className="form-help">受邀者會透過專屬連結自行設定密碼。</p><button className="primary wide">建立並發送邀請</button></form></Modal>}
+    {editing&&<Modal title="編輯後台用戶" close={()=>setEditing(null)}><form className="data-form" onSubmit={saveUser}><Input label="姓名" required value={editing.full_name} onChange={v=>setEditing(f=>({...f,full_name:v}))}/><Input label="登入電郵" value={editing.email} onChange={()=>{}}/><Input label="權限" value={editing.role} onChange={v=>setEditing(f=>({...f,role:v}))} options={[{value:'admin',label:'程式管理員'},{value:'staff',label:'User'}]}/><Input label="狀態" value={editing.status} onChange={v=>setEditing(f=>({...f,status:v}))} options={[{value:'active',label:'有效'},{value:'inactive',label:'停用'}]}/><button className="primary wide">儲存</button></form></Modal>}
+  </div>
+}
+
 function RowContent({ table, row }) {
   if (table === 'events') return <><b>{row.title}</b><span>{fmtDate(row.starts_at)} · {row.venue || '地點待定'}</span><em>{row.status} · {money(row.fee_cents)}</em></>
   if (table === 'registration_settings') return <><b>{row.events?.title || '活動報名設定'}</b><span>{row.form_title}</span><em>{row.is_open ? '開放報名' : '暫停報名'}</em></>
@@ -488,7 +537,12 @@ function App() {
   const notify = (text, type = 'success') => { setToast({ text, type }); setTimeout(() => setToast(null), 3500) }
   useEffect(() => {
     if (!isConfigured) { setChecking(false); return }
-    supabase.auth.getSession().then(({ data }) => { setSession(data.session); setChecking(false) })
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (data.session && !sessionStorage.getItem('eventflow_authenticated')) {
+        await supabase.auth.signOut(); setSession(null)
+      } else setSession(data.session)
+      setChecking(false)
+    })
     const { data } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
     return () => data.subscription.unsubscribe()
   }, [])
@@ -505,20 +559,25 @@ function App() {
       supabase.from('registration_settings').select('*, events(title)').order('updated_at', { ascending: false }),
     ])
     const next = { events: queries[0].data || [], profiles: queries[1].data || [], registrations: queries[2].data || [], members: queries[3].data || [], attendance: queries[4].data || [], payments: queries[5].data || [], announcements: queries[6].data || [], registration_settings: queries[7].data || [] }
-    setData(next); setProfile(next.profiles.find(p => p.id === session.user.id) || null)
+    const currentProfile = next.profiles.find(p => p.id === session.user.id) || null
+    if (!currentProfile || !['admin','staff'].includes(currentProfile.role) || currentProfile.status !== 'active') {
+      sessionStorage.removeItem('eventflow_authenticated'); await supabase.auth.signOut(); setSession(null); setProfile(null); return
+    }
+    setData(next); setProfile(currentProfile)
     const err = queries.find(q => q.error)?.error; if (err) notify(err.message, 'error')
   }
   useEffect(() => { refresh() }, [session])
   const titleDate = useMemo(() => new Intl.DateTimeFormat('zh-HK', { dateStyle: 'long' }).format(new Date()), [])
-  const publicSlug = new URLSearchParams(location.search).get('register')
+  const params = new URLSearchParams(location.search), publicSlug = params.get('register'), inviteToken = params.get('invite')
   if (!isConfigured) return <div className="setup-error">尚未設定 Supabase 環境變數。</div>
   if (publicSlug) return <PublicRegistration slug={publicSlug}/>
+  if (inviteToken) return <InvitationSignup token={inviteToken}/>
   if (checking) return <div className="loading-page">正在載入 EventFlow…</div>
   if (!session) return <Login/>
   const table = pageTable[active]
   return <div className="app-shell"><Sidebar open={menu} close={() => setMenu(false)} active={active} setActive={setActive} profile={profile}/><main>
-    <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● 雲端已同步</span></div></header>
-    <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '報表' ? <Reports data={data}/> : active === '會員名錄' ? <MemberDirectory data={data} user={session.user} profile={profile} refresh={refresh} notify={notify}/> : active === '點名' ? <AttendanceBoard data={data} user={session.user} refresh={refresh} notify={notify}/> : active === '通告發佈' ? <NoticePublisher data={data} user={session.user} refresh={refresh} notify={notify}/> : active === '付款' ? <PaymentBoard data={data} refresh={refresh} notify={notify}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
+    <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● 雲端已同步</span><button className="top-logout" onClick={()=>{sessionStorage.removeItem('eventflow_authenticated');supabase.auth.signOut()}}><LogOut size={16}/>登出</button></div></header>
+    <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '報表' ? <Reports data={data}/> : active === '會員名錄' ? <MemberDirectory data={data} user={session.user} profile={profile} refresh={refresh} notify={notify}/> : active === '點名' ? <AttendanceBoard data={data} user={session.user} refresh={refresh} notify={notify}/> : active === '通告發佈' ? <NoticePublisher data={data} user={session.user} refresh={refresh} notify={notify}/> : active === '付款' ? <PaymentBoard data={data} refresh={refresh} notify={notify}/> : active === '用戶及權限' ? <UserAdministration data={data} user={session.user} refresh={refresh} notify={notify}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
     <Toast toast={toast}/>
   </main></div>
 }
