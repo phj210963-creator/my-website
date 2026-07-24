@@ -81,10 +81,10 @@ function InvitationSignup({ token }) {
     setState(s=>({...s,busy:true,error:''}))
     const {error}=await supabase.auth.signUp({email:invite.email,password:form.password,options:{data:{full_name:form.full_name}}})
     if(error) setState(s=>({...s,busy:false,error:error.message}))
-    else { sessionStorage.setItem('eventflow_authenticated','1'); setState(s=>({...s,busy:false,done:true})) }
+    else { sessionStorage.removeItem('eventflow_authenticated'); setState(s=>({...s,busy:false,done:true})) }
   }
   if(state.loading)return <div className="loading-page">正在驗證邀請…</div>
-  return <div className="auth-page"><section className="auth-card"><div className="auth-brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span></div>{state.done?<><h1>帳戶已建立</h1><p>如系統要求確認電郵，請先完成確認，然後返回登入。</p><a className="primary link-button" href="/">返回登入</a></>:<><h1>接受後台邀請</h1>{invite&&<p>{invite.email} · {invite.role==='admin'?'程式管理員':'User'}</p>}<form onSubmit={submit}><Input label="姓名" required value={form.full_name} onChange={v=>setForm(f=>({...f,full_name:v}))}/><Input label="自行設定密碼" type="password" required value={form.password} onChange={v=>setForm(f=>({...f,password:v}))}/><Input label="再次輸入密碼" type="password" required value={form.confirm} onChange={v=>setForm(f=>({...f,confirm:v}))}/>{state.error&&<div className="form-message">{state.error}</div>}<button className="primary wide" disabled={!invite||state.busy}>{state.busy?'建立中…':'建立帳戶'}</button></form></>}</section></div>
+  return <div className="auth-page"><section className="auth-card"><div className="auth-brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span></div>{state.done?<><h1>帳戶已建立</h1><p>電郵已透過邀請連結完成驗證。現在可使用電郵及剛設定的密碼登入。</p><a className="primary link-button" href="/">前往登入</a></>:<><h1>接受後台邀請</h1>{invite&&<p>{invite.email} · {invite.role==='admin'?'程式管理員':'User'}</p>}<form onSubmit={submit}><Input label="姓名" required value={form.full_name} onChange={v=>setForm(f=>({...f,full_name:v}))}/><Input label="自行設定密碼" type="password" required value={form.password} onChange={v=>setForm(f=>({...f,password:v}))}/><Input label="再次輸入密碼" type="password" required value={form.confirm} onChange={v=>setForm(f=>({...f,confirm:v}))}/>{state.error&&<div className="form-message">{state.error}</div>}<button className="primary wide" disabled={!invite||state.busy}>{state.busy?'建立中…':'建立帳戶'}</button></form></>}</section></div>
 }
 
 function PublicRegistration({ slug }) {
