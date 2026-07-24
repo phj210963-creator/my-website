@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   BellRing, CalendarDays, ChartNoAxesColumnIncreasing, Check, ClipboardCheck,
   Download, FileText, Gauge, LogOut, Mail, Menu, Pencil, Plus, QrCode,
@@ -319,10 +319,12 @@ async function createDigitalNotice(file, url) {
 }
 
 function NoticePublisher({ data, user, refresh, notify }) {
+  const fileInput = useRef(null)
   const [eventId, setEventId] = useState(data.events.find(x => x.status === 'open')?.id || data.events[0]?.id || '')
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('各位會員：\n\n誠邀閣下參加以下活動。詳情請參閱通告，並點擊報名連結或掃描 QR Code 完成報名。\n\n期待與您見面！')
   const [file, setFile] = useState(null), [generated, setGenerated] = useState(null), [preview, setPreview] = useState(''), [busy, setBusy] = useState(false)
+  const [dragActive, setDragActive] = useState(false), [uploadError, setUploadError] = useState('')
   const event = data.events.find(x => x.id === eventId)
   const registrationUrl = event ? `${location.origin}/?register=${event.slug}` : ''
   const recipients = data.members.filter(x => x.member_status !== 'inactive').map(x => x.email || x.profiles?.email).filter(Boolean)
@@ -341,7 +343,21 @@ function NoticePublisher({ data, user, refresh, notify }) {
     if (!generated) return
     const a = document.createElement('a'); a.href = URL.createObjectURL(generated); a.download = generated.name; a.click()
   }
-  function selectFile(next) { if (next) { setFile(next); setGenerated(null); setPreview('') } }
+  function selectFile(next) {
+    if (!next) return
+    const allowed = next.type.startsWith('image/') || next.type === 'application/pdf' || /\.pdf$/i.test(next.name)
+    if (!allowed) return setUploadError('只接受 JPG、PNG、其他圖片格式或 PDF。')
+    if (next.size > 25 * 1024 * 1024) return setUploadError('檔案不可大於 25MB。')
+    setUploadError('')
+    setFile(next)
+    setGenerated(null)
+    if (preview) URL.revokeObjectURL(preview)
+    setPreview('')
+  }
+  function pasteFile(e) {
+    const pasted = [...(e.clipboardData?.items || [])].find(item => item.kind === 'file')?.getAsFile()
+    if (pasted) { e.preventDefault(); selectFile(pasted) }
+  }
   async function makeEml() {
     const bytes = new Uint8Array(await generated.arrayBuffer())
     let binary = ''; for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
@@ -374,7 +390,7 @@ function NoticePublisher({ data, user, refresh, notify }) {
   }
   return <div className="feature-page"><div className="feature-head"><div><p className="eyebrow">NOTICE PUBLISHER</p><h2>活動通告發佈</h2><span>上載通告或 Poster，自動加入報名 QR Code，再以電郵發送給會員。</span></div><span className="recipient-count">會員名單 {recipients.length} 人</span></div>
     <div className="notice-steps"><span><b>1</b>上載通告</span><span><b>2</b>加入 QR Code</span><span><b>3</b>電郵發佈</span></div>
-    <div className="notice-grid"><article className="card notice-editor"><p className="eyebrow">POSTER EDITOR</p><h2>通告及 QR Code</h2><Input label="活動" value={eventId} onChange={setEventId} options={data.events.map(x => ({value:x.id,label:x.title}))}/><label className={`drop-zone ${file?'has-file':''}`} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();selectFile(e.dataTransfer.files?.[0])}}><Upload size={30}/><b>{file?file.name:'拖放檔案到這裡'}</b><span>或按此選擇 JPG、PNG、PDF</span><input type="file" accept="image/*,.pdf" onChange={e=>selectFile(e.target.files?.[0])}/></label><small>系統會在右下角加入 QR Code；會員亦可直接點擊電郵內的報名網址。</small>{preview && <img className="notice-preview" src={preview} alt="已加入 QR Code 的通告預覽"/>}{generated && !preview && <div className="pdf-ready"><FileText size={32}/>PDF 通告已加入 QR Code</div>}<div className="notice-actions"><button className="primary" disabled={!file || busy} onClick={generate}><QrCode size={17}/>{busy ? '處理中…' : '產生數碼通告'}</button><button className="secondary" disabled={!generated} onClick={download}><Download size={17}/>下載</button></div></article>
+    <div className="notice-grid"><article className="card notice-editor" onPaste={pasteFile}><p className="eyebrow">POSTER EDITOR</p><h2>通告及 QR Code</h2><Input label="活動" value={eventId} onChange={setEventId} options={data.events.map(x => ({value:x.id,label:x.title}))}/><div className={`drop-zone ${file?'has-file':''} ${dragActive?'drag-active':''}`} tabIndex="0" onDragEnter={e=>{e.preventDefault();setDragActive(true)}} onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='copy';setDragActive(true)}} onDragLeave={e=>{e.preventDefault();if(!e.currentTarget.contains(e.relatedTarget))setDragActive(false)}} onDrop={e=>{e.preventDefault();setDragActive(false);selectFile(e.dataTransfer.files?.[0])}}><Upload size={30}/><b>{file?file.name:'拖放檔案到這裡'}</b><span>可拖放、貼上圖片，或使用選檔按鈕</span><button type="button" className="secondary choose-file" onClick={()=>fileInput.current?.click()}>從電腦選擇檔案</button><input ref={fileInput} className="file-picker" type="file" accept="image/*,.pdf,application/pdf" onChange={e=>{selectFile(e.target.files?.[0]);e.target.value=''}}/></div>{uploadError&&<div className="form-message">{uploadError}</div>}<small>支援 JPG、PNG、其他圖片及 PDF（最大 25MB）。系統會在右下角加入 QR Code；會員亦可直接點擊電郵內的報名網址。</small>{preview && <img className="notice-preview" src={preview} alt="已加入 QR Code 的通告預覽"/>}{generated && !preview && <div className="pdf-ready"><FileText size={32}/>PDF 通告已加入 QR Code</div>}<div className="notice-actions"><button className="primary" disabled={!file || busy} onClick={generate}><QrCode size={17}/>{busy ? '處理中…' : '產生數碼通告'}</button><button className="secondary" disabled={!generated} onClick={download}><Download size={17}/>下載</button></div></article>
       <aside className="card email-panel"><p className="eyebrow">EMAIL DELIVERY</p><h2>電郵發佈</h2><Input label="電郵主旨" value={subject} onChange={setSubject}/><Input label="電郵內容" rows={8} value={body} onChange={setBody}/><div className="registration-link"><b>專屬報名頁</b><a href={registrationUrl} target="_blank">{registrationUrl || '請先選擇活動'}</a></div><div className="email-summary"><span><b>{recipients.length}</b> 預計收件人</span><span><b>{generated ? '✓' : '—'}</b> 數碼通告附件</span></div><button className="primary wide" disabled={!generated || !recipients.length || busy} onClick={saveAndEmail}><Mail size={17}/>建立附有數碼通告的電郵</button><small>下載的 .eml 電郵檔已包含會員 BCC、主旨、內容、報名網址及數碼通告附件；開啟後即可檢查並發送。</small></aside></div>
   </div>
 }
