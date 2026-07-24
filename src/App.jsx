@@ -325,6 +325,24 @@ function NoticePublisher({ data, user, refresh, notify }) {
     if (!generated) return
     const a = document.createElement('a'); a.href = URL.createObjectURL(generated); a.download = generated.name; a.click()
   }
+  function selectFile(next) { if (next) { setFile(next); setGenerated(null); setPreview('') } }
+  async function makeEml() {
+    const bytes = new Uint8Array(await generated.arrayBuffer())
+    let binary = ''; for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
+    const attachment = btoa(binary).match(/.{1,76}/g).join('\r\n')
+    const boundary = `EventFlow-${Date.now()}`, emailSubject = subject || `誠邀出席｜${event.title}`
+    const eml = [
+      `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(emailSubject)))}?=`,
+      `Bcc: ${recipients.join(', ')}`, 'MIME-Version: 1.0',
+      `Content-Type: multipart/mixed; boundary="${boundary}"`, '',
+      `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: 8bit', '',
+      `${body}\r\n\r\n網上報名：${registrationUrl}`, '',
+      `--${boundary}`, `Content-Type: ${generated.type}; name="${generated.name}"`,
+      'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${generated.name}"`, '', attachment, '',
+      `--${boundary}--`,
+    ].join('\r\n')
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([eml], {type:'message/rfc822'})); a.download = `${event.slug}-email-with-notice.eml`; a.click()
+  }
   async function saveAndEmail() {
     if (!generated || !event) return
     setBusy(true)
@@ -334,16 +352,14 @@ function NoticePublisher({ data, user, refresh, notify }) {
       if (up.error) throw up.error
       const result = await supabase.from('announcements').insert({ event_id: event.id, subject: subject || `誠邀出席｜${event.title}`, body_html: body.replaceAll('\n','<br>'), attachment_path: path, registration_url: registrationUrl, recipient_group: 'all_active_members', status: 'sent', sent_at: new Date().toISOString(), created_by: user.id })
       if (result.error) throw result.error
-      download()
-      const mailBody = `${body}\n\n網上報名：${registrationUrl}\n\n數碼通告已下載，請加入電郵附件。`
-      location.href = `mailto:?bcc=${encodeURIComponent(recipients.join(','))}&subject=${encodeURIComponent(subject || `誠邀出席｜${event.title}`)}&body=${encodeURIComponent(mailBody)}`
-      notify('通告已儲存，並已開啟電郵草稿'); refresh()
+      await makeEml()
+      notify('已建立包含數碼通告附件的電郵檔案'); refresh()
     } catch (err) { notify(err.message, 'error') } finally { setBusy(false) }
   }
   return <div className="feature-page"><div className="feature-head"><div><p className="eyebrow">NOTICE PUBLISHER</p><h2>活動通告發佈</h2><span>上載通告或 Poster，自動加入報名 QR Code，再以電郵發送給會員。</span></div><span className="recipient-count">會員名單 {recipients.length} 人</span></div>
     <div className="notice-steps"><span><b>1</b>上載通告</span><span><b>2</b>加入 QR Code</span><span><b>3</b>電郵發佈</span></div>
-    <div className="notice-grid"><article className="card notice-editor"><p className="eyebrow">POSTER EDITOR</p><h2>通告及 QR Code</h2><Input label="活動" value={eventId} onChange={setEventId} options={data.events.map(x => ({value:x.id,label:x.title}))}/><Input label="上載活動通告或 Poster（JPG、PNG、PDF）" type="file" accept="image/*,.pdf" onChange={setFile}/><small>系統會在右下角加入 QR Code；會員亦可直接點擊電郵內的報名網址。</small>{preview && <img className="notice-preview" src={preview} alt="已加入 QR Code 的通告預覽"/>}{generated && !preview && <div className="pdf-ready"><FileText size={32}/>PDF 通告已加入 QR Code</div>}<div className="notice-actions"><button className="primary" disabled={!file || busy} onClick={generate}><QrCode size={17}/>{busy ? '處理中…' : '產生數碼通告'}</button><button className="secondary" disabled={!generated} onClick={download}><Download size={17}/>下載</button></div></article>
-      <aside className="card email-panel"><p className="eyebrow">EMAIL DELIVERY</p><h2>電郵發佈</h2><Input label="電郵主旨" value={subject} onChange={setSubject}/><Input label="電郵內容" rows={8} value={body} onChange={setBody}/><div className="registration-link"><b>專屬報名頁</b><a href={registrationUrl} target="_blank">{registrationUrl || '請先選擇活動'}</a></div><div className="email-summary"><span><b>{recipients.length}</b> 預計收件人</span><span><b>{generated ? '✓' : '—'}</b> 數碼通告</span></div><button className="primary wide" disabled={!generated || !recipients.length || busy} onClick={saveAndEmail}><Mail size={17}/>下載通告並開啟電郵發送</button><small>系統會預填會員 BCC、主旨、內容及可點擊報名連結；數碼通告會同時下載，供加入附件。</small></aside></div>
+    <div className="notice-grid"><article className="card notice-editor"><p className="eyebrow">POSTER EDITOR</p><h2>通告及 QR Code</h2><Input label="活動" value={eventId} onChange={setEventId} options={data.events.map(x => ({value:x.id,label:x.title}))}/><label className={`drop-zone ${file?'has-file':''}`} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();selectFile(e.dataTransfer.files?.[0])}}><Upload size={30}/><b>{file?file.name:'拖放檔案到這裡'}</b><span>或按此選擇 JPG、PNG、PDF</span><input type="file" accept="image/*,.pdf" onChange={e=>selectFile(e.target.files?.[0])}/></label><small>系統會在右下角加入 QR Code；會員亦可直接點擊電郵內的報名網址。</small>{preview && <img className="notice-preview" src={preview} alt="已加入 QR Code 的通告預覽"/>}{generated && !preview && <div className="pdf-ready"><FileText size={32}/>PDF 通告已加入 QR Code</div>}<div className="notice-actions"><button className="primary" disabled={!file || busy} onClick={generate}><QrCode size={17}/>{busy ? '處理中…' : '產生數碼通告'}</button><button className="secondary" disabled={!generated} onClick={download}><Download size={17}/>下載</button></div></article>
+      <aside className="card email-panel"><p className="eyebrow">EMAIL DELIVERY</p><h2>電郵發佈</h2><Input label="電郵主旨" value={subject} onChange={setSubject}/><Input label="電郵內容" rows={8} value={body} onChange={setBody}/><div className="registration-link"><b>專屬報名頁</b><a href={registrationUrl} target="_blank">{registrationUrl || '請先選擇活動'}</a></div><div className="email-summary"><span><b>{recipients.length}</b> 預計收件人</span><span><b>{generated ? '✓' : '—'}</b> 數碼通告附件</span></div><button className="primary wide" disabled={!generated || !recipients.length || busy} onClick={saveAndEmail}><Mail size={17}/>建立附有數碼通告的電郵</button><small>下載的 .eml 電郵檔已包含會員 BCC、主旨、內容、報名網址及數碼通告附件；開啟後即可檢查並發送。</small></aside></div>
   </div>
 }
 
@@ -354,7 +370,7 @@ function RowContent({ table, row }) {
   if (table === 'registrations') return <><b>{row.attendee_name_zh || row.attendee_name_en || row.profiles?.full_name || row.profiles?.email || '非會員參加者'}</b><span>{row.attendee_email || row.profiles?.email || '沒有電郵'} · {row.events?.title} · {fmtDate(row.registered_at)}</span><em>{row.status}</em></>
   if (table === 'members') return <><b>{[row.name_zh, row.name_en].filter(Boolean).join(' / ') || row.profiles?.full_name || row.profiles?.email}</b><span>{row.membership_number} · {row.organization || '—'}</span><em>{row.member_status || 'active'}</em></>
   if (table === 'attendance') return <><b>{row.registrations?.attendee_name_zh || row.registrations?.attendee_name_en || row.registrations?.profiles?.full_name || row.registrations?.profiles?.email || '參加者'}</b><span>{row.registrations?.events?.title} · {fmtDate(row.checked_in_at)}</span><em>{row.method}</em></>
-  if (table === 'payments') return <><b>{row.registrations?.attendee_name_zh || row.registrations?.attendee_name_en || row.profiles?.full_name || row.profiles?.email || '付款人'}</b><span>{money(row.amount_cents)} · {row.provider || '—'} · {fmtDate(row.paid_at)}</span><em>{row.status}</em></>
+  if (table === 'payments') return <><b>{row.payer_name || row.registrations?.attendee_name_zh || row.registrations?.attendee_name_en || row.profiles?.full_name || row.profiles?.email || '付款人'}</b><span>{money(row.amount_cents)} · {row.provider || '—'} · {row.payment_date || fmtDate(row.paid_at)}</span><em>{row.status}</em></>
   return <><b>{[row.full_name_zh, row.full_name_en].filter(Boolean).join(' / ') || row.full_name || row.email}</b><span>{row.email} · {row.phone || '—'}</span><em>{row.role} · {row.status}</em></>
 }
 
@@ -396,26 +412,67 @@ function QrPanel({ value }) {
   return <div className="qr-panel"><div ref={ref}/><p>{value}</p><button className="secondary" onClick={() => navigator.clipboard.writeText(value)}>複製連結</button></div>
 }
 
-function Reports({ data }) {
-  function exportCsv(name, rows) {
-    if (!rows.length) return
-    const keys = Object.keys(rows[0]).filter(k => !k.includes('profiles') && !k.includes('events'))
-    const csv = [keys.join(','), ...rows.map(r => keys.map(k => `"${String(r[k] ?? '').replaceAll('"', '""')}"`).join(','))].join('\n')
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv' })); a.download = `${name}-${new Date().toISOString().slice(0,10)}.csv`; a.click()
+function exportCsv(name, rows) {
+  if (!rows.length) return
+  const keys = Object.keys(rows[0])
+  const csv = [keys.join(','), ...rows.map(r => keys.map(k => `"${String(r[k] ?? '').replaceAll('"', '""')}"`).join(','))].join('\n')
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv' })); a.download = `${name}-${new Date().toISOString().slice(0,10)}.csv`; a.click()
+}
+
+function receivableRows(data, eventId = '') {
+  return data.registrations.filter(r => r.status !== 'cancelled' && (!eventId || r.event_id === eventId)).map(r => {
+    const expected = Number(r.events?.fee_cents || 0) * (Number(r.guest_count || 0) + 1)
+    const paid = data.payments.filter(p => p.registration_id === r.id && p.status === 'paid').reduce((sum, p) => sum + Number(p.amount_cents || 0), 0)
+    return {
+      registration_id: r.id,
+      participant: r.attendee_name_zh || r.attendee_name_en || r.profiles?.full_name || r.profiles?.email || '參加者',
+      email: r.attendee_email || r.profiles?.email || '',
+      phone: r.attendee_phone || '',
+      event: r.events?.title || '',
+      event_id: r.event_id,
+      registered_at: r.registered_at,
+      expected_cents: expected,
+      paid_cents: paid,
+      outstanding_cents: Math.max(0, expected - paid),
+    }
+  })
+}
+
+function PaymentBoard({ data, refresh, notify }) {
+  const [editing, setEditing] = useState(false)
+  const [eventId, setEventId] = useState(data.events[0]?.id || '')
+  const [form, setForm] = useState({ registration_id:'', payer_name:'', payer_email:'', amount:'', status:'paid', provider:'bank_transfer', payment_date:new Date().toISOString().slice(0,10), provider_reference:'', notes:'' })
+  const rows = receivableRows(data, eventId)
+  const expected = rows.reduce((s,r)=>s+r.expected_cents,0), received = rows.reduce((s,r)=>s+r.paid_cents,0), outstanding = rows.reduce((s,r)=>s+r.outstanding_cents,0)
+  const selected = data.registrations.find(r => r.id === form.registration_id)
+  function chooseRegistration(id) {
+    const r = data.registrations.find(x => x.id === id), rr = rows.find(x => x.registration_id === id)
+    setForm(f => ({...f, registration_id:id, payer_name:r?.attendee_name_zh || r?.attendee_name_en || r?.profiles?.full_name || '', payer_email:r?.attendee_email || r?.profiles?.email || '', amount:((rr?.outstanding_cents || r?.events?.fee_cents || 0)/100).toFixed(2)}))
   }
-  const total = data.payments.filter(x => x.status === 'paid').reduce((s, x) => s + Number(x.amount_cents), 0)
-  const paidIds = new Set(data.payments.filter(x => ['paid','waived'].includes(x.status)).map(x => x.registration_id))
-  const outstanding = data.registrations.filter(r => r.status !== 'cancelled' && Number(r.events?.fee_cents) > 0 && !paidIds.has(r.id)).map(r => ({
-    participant: r.attendee_name_zh || r.attendee_name_en || r.profiles?.full_name || r.profiles?.email || '參加者',
-    email: r.attendee_email || r.profiles?.email || '',
-    event: r.events?.title || '',
-    amount_due_hkd: (Number(r.events?.fee_cents) / 100).toFixed(2),
-    registered_at: r.registered_at,
-  }))
-  const due = outstanding.reduce((s, r) => s + Number(r.amount_due_hkd) * 100, 0)
-  return <div className="report-grid"><article className="card report-summary"><p className="eyebrow">財務摘要</p><h2>已收款項</h2><strong>{money(total)}</strong><span>{data.payments.filter(x => x.status === 'paid').length} 筆已付款紀錄</span></article>
-    <article className="card report-summary outstanding"><p className="eyebrow">應收未收</p><h2>尚欠款項</h2><strong>{money(due)}</strong><span>{outstanding.length} 筆待收款</span><button className="secondary" onClick={() => exportCsv('應收未收款項', outstanding)}>匯出報表</button></article>
-    {[['活動',data.events],['報名',data.registrations],['會員',data.members],['點名',data.attendance],['付款',data.payments]].map(([name,rows]) => <article className="card export-card" key={name}><span className="icon-box green"><Download size={19}/></span><div><b>{name}報表</b><small>{rows.length} 筆資料</small></div><button className="secondary" onClick={() => exportCsv(name, rows)}>匯出 CSV</button></article>)}</div>
+  async function save(e) {
+    e.preventDefault()
+    const payload = { registration_id:form.registration_id, profile_id:selected?.profile_id || null, payer_name:form.payer_name, payer_email:form.payer_email, amount_cents:Math.round(Number(form.amount)*100), status:form.status, provider:form.provider, provider_reference:form.provider_reference || `manual-${Date.now()}`, payment_date:form.payment_date, paid_at:form.status==='paid' ? new Date(`${form.payment_date}T12:00:00`).toISOString() : null, notes:form.notes }
+    const { error } = await supabase.from('payments').insert(payload)
+    if (error) notify(error.message,'error'); else { notify('付款紀錄已儲存'); setEditing(false); await refresh() }
+  }
+  return <div className="feature-page"><div className="feature-head"><div><p className="eyebrow">PAYMENT RECORDS</p><h2>付款紀錄</h2><span>每筆付款均連結付款人、參加者及活動。</span></div><button className="primary" onClick={()=>setEditing(true)}><Plus size={17}/>新增付款紀錄</button></div>
+    <label className="report-filter">查看活動<select value={eventId} onChange={e=>setEventId(e.target.value)}>{data.events.map(x=><option key={x.id} value={x.id}>{x.title}</option>)}</select></label>
+    <div className="stat-grid mini-stats"><article className="stat-card"><div><p>預計總收入</p><strong>{money(expected)}</strong></div></article><article className="stat-card"><div><p>已收款</p><strong>{money(received)}</strong></div></article><article className="stat-card"><div><p>待收款</p><strong>{money(outstanding)}</strong></div></article></div>
+    <article className="card directory-card"><div className="table-scroll"><table className="directory-table"><thead><tr><th>參加者／活動</th><th>聯絡資料</th><th>應付</th><th>已付</th><th>尚欠</th><th>狀態</th></tr></thead><tbody>{rows.map(r=><tr key={r.registration_id}><td><b>{r.participant}</b><small>{r.event}</small></td><td>{r.phone||'—'}<small>{r.email||'—'}</small></td><td>{money(r.expected_cents)}</td><td>{money(r.paid_cents)}</td><td><b>{money(r.outstanding_cents)}</b></td><td><span className="status">{r.outstanding_cents ? '待付款' : '已付款'}</span></td></tr>)}</tbody></table></div></article>
+    {editing&&<Modal title="新增付款紀錄" close={()=>setEditing(false)}><form className="data-form" onSubmit={save}><Input label="活動" required value={eventId} onChange={v=>{setEventId(v);setForm(f=>({...f,registration_id:''}))}} options={data.events.map(x=>({value:x.id,label:x.title}))}/><Input label="參加者／報名紀錄" required value={form.registration_id} onChange={chooseRegistration} options={data.registrations.filter(r=>r.event_id===eventId).map(r=>({value:r.id,label:`${r.attendee_name_zh||r.attendee_name_en||r.profiles?.full_name||'參加者'} · ${r.events?.title}`}))}/><div className="form-grid"><Input label="付款人姓名" required value={form.payer_name} onChange={v=>setForm(f=>({...f,payer_name:v}))}/><Input label="付款人電郵" type="email" value={form.payer_email} onChange={v=>setForm(f=>({...f,payer_email:v}))}/></div><div className="form-grid"><Input label="付款日期" type="date" required value={form.payment_date} onChange={v=>setForm(f=>({...f,payment_date:v}))}/><Input label="付款金額（HKD）" type="number" required value={form.amount} onChange={v=>setForm(f=>({...f,amount:v}))}/></div><div className="form-grid"><Input label="付款方式" value={form.provider} onChange={v=>setForm(f=>({...f,provider:v}))} options={[{value:'cash',label:'現金'},{value:'bank_transfer',label:'銀行轉帳'},{value:'cheque',label:'支票'},{value:'fps',label:'轉數快'},{value:'credit_card',label:'信用卡'}]}/><Input label="付款狀態" value={form.status} onChange={v=>setForm(f=>({...f,status:v}))} options={[{value:'paid',label:'已付款'},{value:'pending',label:'待確認'},{value:'refunded',label:'已退款'},{value:'waived',label:'豁免'}]}/></div><Input label="交易編號" value={form.provider_reference} onChange={v=>setForm(f=>({...f,provider_reference:v}))}/><Input label="備註" rows={3} value={form.notes} onChange={v=>setForm(f=>({...f,notes:v}))}/><button className="primary wide">儲存付款紀錄</button></form></Modal>}
+  </div>
+}
+
+function Reports({ data }) {
+  const [eventId,setEventId]=useState(data.events[0]?.id||'')
+  const rows=receivableRows(data,eventId), outstanding=rows.filter(r=>r.outstanding_cents>0)
+  const expected=rows.reduce((s,r)=>s+r.expected_cents,0), received=rows.reduce((s,r)=>s+r.paid_cents,0), due=rows.reduce((s,r)=>s+r.outstanding_cents,0), progress=expected?Math.round(received/expected*100):0
+  const exportRows=outstanding.map(r=>({參加者:r.participant,活動:r.event,電話:r.phone,電郵:r.email,報名日期:fmtDate(r.registered_at),應付金額:(r.expected_cents/100).toFixed(2),已付金額:(r.paid_cents/100).toFixed(2),尚欠金額:(r.outstanding_cents/100).toFixed(2)}))
+  return <div className="feature-page"><div className="feature-head"><div><p className="eyebrow">ACCOUNTS RECEIVABLE</p><h2>應收未收報表</h2><span>集中查看哪位參加者、哪個活動尚未付款。</span></div><button className="secondary" onClick={()=>exportCsv('應收未收報表',exportRows)}><Download size={17}/>匯出報表</button></div>
+    <label className="report-filter">活動<select value={eventId} onChange={e=>setEventId(e.target.value)}>{data.events.map(x=><option key={x.id} value={x.id}>{x.title}</option>)}</select></label>
+    <article className="card receivable-summary"><div><p>待收款總額</p><strong>{money(due)}</strong><span>共 {outstanding.length} 位參加者</span></div><div className="progress-ring">{progress}%</div><div><p>收款進度</p><b>已收 {money(received)} ／預計 {money(expected)}</b></div></article>
+    <article className="card directory-card"><div className="table-scroll"><table className="directory-table"><thead><tr><th>參加者</th><th>活動</th><th>聯絡資料</th><th>報名日期</th><th>已付／應付</th><th>尚欠金額</th></tr></thead><tbody>{outstanding.map(r=><tr key={r.registration_id}><td><b>{r.participant}</b></td><td>{r.event}</td><td>{r.phone||'—'}<small>{r.email||'—'}</small></td><td>{fmtDate(r.registered_at)}</td><td>{money(r.paid_cents)} / {money(r.expected_cents)}</td><td><b>{money(r.outstanding_cents)}</b></td></tr>)}</tbody></table></div>{!outstanding.length&&<p className="empty">這個活動沒有未收款項。</p>}</article>
+  </div>
 }
 
 function Toast({ toast }) { return toast && <div className={`toast ${toast.type}`}><Check size={16}/>{toast.text}</div> }
@@ -461,7 +518,7 @@ function App() {
   const table = pageTable[active]
   return <div className="app-shell"><Sidebar open={menu} close={() => setMenu(false)} active={active} setActive={setActive} profile={profile}/><main>
     <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● 雲端已同步</span></div></header>
-    <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '報表' ? <Reports data={data}/> : active === '會員名錄' ? <MemberDirectory data={data} user={session.user} profile={profile} refresh={refresh} notify={notify}/> : active === '點名' ? <AttendanceBoard data={data} user={session.user} refresh={refresh} notify={notify}/> : active === '通告發佈' ? <NoticePublisher data={data} user={session.user} refresh={refresh} notify={notify}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
+    <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '報表' ? <Reports data={data}/> : active === '會員名錄' ? <MemberDirectory data={data} user={session.user} profile={profile} refresh={refresh} notify={notify}/> : active === '點名' ? <AttendanceBoard data={data} user={session.user} refresh={refresh} notify={notify}/> : active === '通告發佈' ? <NoticePublisher data={data} user={session.user} refresh={refresh} notify={notify}/> : active === '付款' ? <PaymentBoard data={data} refresh={refresh} notify={notify}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
     <Toast toast={toast}/>
   </main></div>
 }
