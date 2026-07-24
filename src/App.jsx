@@ -328,6 +328,7 @@ function NoticePublisher({ data, user, refresh, notify }) {
   const event = data.events.find(x => x.id === eventId)
   const registrationUrl = event ? `${location.origin}/?register=${event.slug}` : ''
   const recipients = data.members.filter(x => x.member_status !== 'inactive').map(x => x.email || x.profiles?.email).filter(Boolean)
+  const sendHistory = data.email_send_logs.filter(x => x.event_id === eventId)
   async function generate() {
     if (!file || !event) return
     setBusy(true)
@@ -358,40 +359,40 @@ function NoticePublisher({ data, user, refresh, notify }) {
     const pasted = [...(e.clipboardData?.items || [])].find(item => item.kind === 'file')?.getAsFile()
     if (pasted) { e.preventDefault(); selectFile(pasted) }
   }
-  async function makeEml() {
-    const bytes = new Uint8Array(await generated.arrayBuffer())
-    let binary = ''; for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
-    const attachment = btoa(binary).match(/.{1,76}/g).join('\r\n')
-    const boundary = `EventFlow-${Date.now()}`, emailSubject = subject || `誠邀出席｜${event.title}`
-    const eml = [
-      `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(emailSubject)))}?=`,
-      `Bcc: ${recipients.join(', ')}`, 'MIME-Version: 1.0',
-      `Content-Type: multipart/mixed; boundary="${boundary}"`, '',
-      `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: 8bit', '',
-      `${body}\r\n\r\n網上報名：${registrationUrl}`, '',
-      `--${boundary}`, `Content-Type: ${generated.type}; name="${generated.name}"`,
-      'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${generated.name}"`, '', attachment, '',
-      `--${boundary}--`,
-    ].join('\r\n')
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([eml], {type:'message/rfc822'})); a.download = `${event.slug}-email-with-notice.eml`; a.click()
-  }
   async function saveAndEmail() {
     if (!generated || !event) return
+    if (!confirm(`确定立即发送给会员名录中的 ${recipients.length} 个电邮地址？`)) return
     setBusy(true)
     try {
       const path = `notices/${Date.now()}-${generated.name.replace(/[^\w.-]/g,'-')}`
       const up = await supabase.storage.from('event-posters').upload(path, generated, { upsert: true })
       if (up.error) throw up.error
-      const result = await supabase.from('announcements').insert({ event_id: event.id, subject: subject || `誠邀出席｜${event.title}`, body_html: body.replaceAll('\n','<br>'), attachment_path: path, registration_url: registrationUrl, recipient_group: 'all_active_members', status: 'sent', sent_at: new Date().toISOString(), created_by: user.id })
-      if (result.error) throw result.error
-      await makeEml()
-      notify('已建立包含數碼通告附件的電郵檔案'); refresh()
+      const emailSubject = subject || `誠邀出席｜${event.title}`
+      const announcement = await supabase.from('announcements').insert({ event_id: event.id, subject: emailSubject, body_html: body.replaceAll('\n','<br>'), attachment_path: path, registration_url: registrationUrl, recipient_group: 'all_active_members', status: 'sending', created_by: user.id }).select('id').single()
+      if (announcement.error) throw announcement.error
+      const { data: sessionData } = await supabase.auth.getSession()
+      const response = await fetch('/api/send-notice', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', Authorization:`Bearer ${sessionData.session?.access_token || ''}` },
+        body: JSON.stringify({
+          event_id:event.id, announcement_id:announcement.data.id, subject:emailSubject, body,
+          registration_url:registrationUrl, attachment_path:path,
+          attachment_name:generated.name, attachment_type:generated.type,
+        }),
+      })
+      const outcome = await response.json()
+      if (!response.ok) {
+        await supabase.from('announcements').update({ status:'failed' }).eq('id', announcement.data.id)
+        throw new Error(outcome.error || '电邮发送失败。')
+      }
+      await supabase.from('announcements').update({ status:'sent', sent_at:new Date().toISOString() }).eq('id', announcement.data.id)
+      notify(`电邮已发送：成功 ${outcome.success_count}，失败 ${outcome.failed_count}`); await refresh()
     } catch (err) { notify(err.message, 'error') } finally { setBusy(false) }
   }
   return <div className="feature-page"><div className="feature-head"><div><p className="eyebrow">NOTICE PUBLISHER</p><h2>活動通告發佈</h2><span>上載通告或 Poster，自動加入報名 QR Code，再以電郵發送給會員。</span></div><span className="recipient-count">會員名單 {recipients.length} 人</span></div>
     <div className="notice-steps"><span><b>1</b>上載通告</span><span><b>2</b>加入 QR Code</span><span><b>3</b>電郵發佈</span></div>
     <div className="notice-grid"><article className="card notice-editor" onPaste={pasteFile}><p className="eyebrow">POSTER EDITOR</p><h2>通告及 QR Code</h2><Input label="活動" value={eventId} onChange={setEventId} options={data.events.map(x => ({value:x.id,label:x.title}))}/><div className={`drop-zone ${file?'has-file':''} ${dragActive?'drag-active':''}`} tabIndex="0" onDragEnter={e=>{e.preventDefault();setDragActive(true)}} onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='copy';setDragActive(true)}} onDragLeave={e=>{e.preventDefault();if(!e.currentTarget.contains(e.relatedTarget))setDragActive(false)}} onDrop={e=>{e.preventDefault();setDragActive(false);selectFile(e.dataTransfer.files?.[0])}}><Upload size={30}/><b>{file?file.name:'拖放檔案到這裡'}</b><span>可拖放、貼上圖片，或使用選檔按鈕</span><button type="button" className="secondary choose-file" onClick={()=>fileInput.current?.click()}>從電腦選擇檔案</button><input ref={fileInput} className="file-picker" type="file" accept="image/*,.pdf,application/pdf" onChange={e=>{selectFile(e.target.files?.[0]);e.target.value=''}}/></div>{uploadError&&<div className="form-message">{uploadError}</div>}<small>支援 JPG、PNG、其他圖片及 PDF（最大 25MB）。系統會在右下角加入 QR Code；會員亦可直接點擊電郵內的報名網址。</small>{preview && <img className="notice-preview" src={preview} alt="已加入 QR Code 的通告預覽"/>}{generated && !preview && <div className="pdf-ready"><FileText size={32}/>PDF 通告已加入 QR Code</div>}<div className="notice-actions"><button className="primary" disabled={!file || busy} onClick={generate}><QrCode size={17}/>{busy ? '處理中…' : '產生數碼通告'}</button><button className="secondary" disabled={!generated} onClick={download}><Download size={17}/>下載</button></div></article>
-      <aside className="card email-panel"><p className="eyebrow">EMAIL DELIVERY</p><h2>電郵發佈</h2><Input label="電郵主旨" value={subject} onChange={setSubject}/><Input label="電郵內容" rows={8} value={body} onChange={setBody}/><div className="registration-link"><b>專屬報名頁</b><a href={registrationUrl} target="_blank">{registrationUrl || '請先選擇活動'}</a></div><div className="email-summary"><span><b>{recipients.length}</b> 預計收件人</span><span><b>{generated ? '✓' : '—'}</b> 數碼通告附件</span></div><button className="primary wide" disabled={!generated || !recipients.length || busy} onClick={saveAndEmail}><Mail size={17}/>建立附有數碼通告的電郵</button><small>下載的 .eml 電郵檔已包含會員 BCC、主旨、內容、報名網址及數碼通告附件；開啟後即可檢查並發送。</small></aside></div>
+      <aside className="card email-panel"><p className="eyebrow">EMAIL DELIVERY</p><h2>電郵發佈</h2><Input label="電郵主旨" value={subject} onChange={setSubject}/><Input label="電郵內容" rows={8} value={body} onChange={setBody}/><div className="registration-link"><b>專屬報名頁</b><a href={registrationUrl} target="_blank">{registrationUrl || '請先選擇活動'}</a></div><div className="email-summary"><span><b>{recipients.length}</b> 会员收件人</span><span><b>{generated ? '✓' : '—'}</b> 数码通告附件</span></div><button className="primary wide send-now" disabled={!generated || !recipients.length || busy} onClick={saveAndEmail}><Mail size={17}/>{busy?'正在发送…':'立即发送给所有会员'}</button><small>收件名单来自「会员名录」中的有效会员。每次发送都会附上数码通告及报名网址，并自动保存发送记录。</small><div className="send-history"><div className="history-head"><b>发送记录</b><span>这个活动已发送 {sendHistory.length} 次</span></div>{sendHistory.length?sendHistory.map(log=><div className="history-row" key={log.id}><span><b>{fmtDate(log.sent_at)}</b><small>{log.subject}</small></span><em className={log.status==='sent'?'sent':'failed'}>{log.status==='sent'?`成功 ${log.success_count}/${log.recipient_count}`:`失败${log.error_message?`：${log.error_message}`:''}`}</em></div>):<p className="empty">这个活动尚未发送电邮。</p>}</div></aside></div>
   </div>
 }
 
@@ -548,7 +549,7 @@ function App() {
   const [active, setActive] = useState('總覽')
   const [menu, setMenu] = useState(false)
   const [profile, setProfile] = useState(null)
-  const [data, setData] = useState({ events: [], profiles: [], registrations: [], members: [], attendance: [], payments: [], announcements: [], registration_settings: [] })
+  const [data, setData] = useState({ events: [], profiles: [], registrations: [], members: [], attendance: [], payments: [], announcements: [], registration_settings: [], email_send_logs: [] })
   const [toast, setToast] = useState(null)
   const notify = (text, type = 'success') => { setToast({ text, type }); setTimeout(() => setToast(null), 3500) }
   useEffect(() => {
@@ -573,8 +574,9 @@ function App() {
       supabase.from('payments').select('*, profiles(full_name,email), registrations(attendee_name_zh,attendee_name_en,attendee_email)').order('created_at', { ascending: false }),
       supabase.from('announcements').select('*, events(title)').order('created_at', { ascending: false }),
       supabase.from('registration_settings').select('*, events(title)').order('updated_at', { ascending: false }),
+      supabase.from('email_send_logs').select('*').order('sent_at', { ascending: false }),
     ])
-    const next = { events: queries[0].data || [], profiles: queries[1].data || [], registrations: queries[2].data || [], members: queries[3].data || [], attendance: queries[4].data || [], payments: queries[5].data || [], announcements: queries[6].data || [], registration_settings: queries[7].data || [] }
+    const next = { events: queries[0].data || [], profiles: queries[1].data || [], registrations: queries[2].data || [], members: queries[3].data || [], attendance: queries[4].data || [], payments: queries[5].data || [], announcements: queries[6].data || [], registration_settings: queries[7].data || [], email_send_logs: queries[8].data || [] }
     const currentProfile = next.profiles.find(p => p.id === session.user.id) || null
     if (!currentProfile || !['admin','staff'].includes(currentProfile.role) || currentProfile.status !== 'active') {
       sessionStorage.removeItem('eventflow_authenticated'); await supabase.auth.signOut(); setSession(null); setProfile(null); return
