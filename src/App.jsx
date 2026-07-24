@@ -199,7 +199,7 @@ function EntityForm({ table, value, lookups, user, close, refresh, notify }) {
       else if (table === 'payments') {
         const reg = lookups.registrations.find(r => r.id === form.registration_id)
         payload = clean({ registration_id: form.registration_id, profile_id: reg?.profile_id, amount_cents: Math.round(Number(form.amount) * 100), status: form.status, provider: form.provider, provider_reference: form.provider_reference || `manual-${Date.now()}`, paid_at: form.status === 'paid' ? (form.paid_at || new Date().toISOString()) : null })
-        if (form.receipt) payload.receipt_path = await upload('payment-receipts', form.receipt, `${reg?.profile_id}/`)
+        if (form.receipt) payload.receipt_path = await upload('payment-receipts', form.receipt, `${reg?.profile_id || 'guest'}/`)
       } else if (table === 'profiles') payload = clean({ full_name: form.full_name, full_name_zh: form.full_name_zh, full_name_en: form.full_name_en, phone: form.phone, role: form.role, status: form.status })
       const query = table === 'registration_settings'
         ? supabase.from(table).upsert(payload, { onConflict: 'event_id' })
