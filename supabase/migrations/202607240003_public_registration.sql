@@ -10,6 +10,8 @@ alter table public.registrations
   add column if not exists attendee_phone text not null default '',
   add column if not exists organization text not null default '';
 
+alter table public.payments alter column profile_id drop not null;
+
 create table if not exists public.registration_settings (
   event_id uuid primary key references public.events(id) on delete cascade,
   form_title text not null default '活動報名表格',
