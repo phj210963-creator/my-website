@@ -368,7 +368,7 @@ function NoticePublisher({ data, user, refresh, notify }) {
       const up = await supabase.storage.from('event-posters').upload(path, generated, { upsert: true })
       if (up.error) throw up.error
       const emailSubject = subject || `誠邀出席｜${event.title}`
-      const announcement = await supabase.from('announcements').insert({ event_id: event.id, subject: emailSubject, body_html: body.replaceAll('\n','<br>'), attachment_path: path, registration_url: registrationUrl, recipient_group: 'all_active_members', status: 'sending', created_by: user.id }).select('id').single()
+      const announcement = await supabase.from('announcements').insert({ event_id: event.id, subject: emailSubject, body_html: body.replaceAll('\n','<br>'), attachment_path: path, registration_url: registrationUrl, recipient_group: 'all_active_members', status: 'draft', created_by: user.id }).select('id').single()
       if (announcement.error) throw announcement.error
       const { data: sessionData } = await supabase.auth.getSession()
       const response = await fetch('/api/send-notice', {
@@ -382,7 +382,6 @@ function NoticePublisher({ data, user, refresh, notify }) {
       })
       const outcome = await response.json()
       if (!response.ok) {
-        await supabase.from('announcements').update({ status:'failed' }).eq('id', announcement.data.id)
         throw new Error(outcome.error || '电邮发送失败。')
       }
       await supabase.from('announcements').update({ status:'sent', sent_at:new Date().toISOString() }).eq('id', announcement.data.id)
