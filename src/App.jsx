@@ -23,7 +23,7 @@ const emptyForms = {
   announcements: { event_id: '', subject: '', body_html: '', status: 'draft', scheduled_for: '' },
   registration_settings: { event_id: '', form_title: '活動報名表格', instructions: '請填寫以下資料完成報名。', success_message: '報名成功，我們將以電郵與你聯絡。', require_name_zh: true, require_name_en: false, require_email: true, require_phone: true, require_organization: false, allow_guest: true, is_open: true },
   registrations: { event_id: '', profile_id: '', attendee_name_zh: '', attendee_name_en: '', attendee_email: '', attendee_phone: '', organization: '', status: 'confirmed', guest_count: 0, special_requirements: '' },
-  members: { profile_id: '', membership_number: '', organization: '', title: '', joined_on: new Date().toISOString().slice(0, 10), expires_on: '', notes: '' },
+  members: { profile_id: '', name_zh: '', name_en: '', email: '', phone: '', membership_number: '', organization: '', title: '', joined_on: new Date().toISOString().slice(0, 10), expires_on: '', member_status: 'active', notes: '' },
   attendance: { registration_id: '', method: 'manual', notes: '' },
   payments: { registration_id: '', amount: 0, status: 'pending', provider: 'manual', provider_reference: '', paid_at: '', receipt: null },
   profiles: { full_name: '', full_name_zh: '', full_name_en: '', phone: '', role: 'member', status: 'active' },
@@ -160,8 +160,11 @@ async function addQrToPoster(file, url) {
   const ctx = canvas.getContext('2d'); ctx.drawImage(image, 0, 0)
   const size = Math.max(180, Math.min(image.width, image.height) * .22)
   const pad = Math.max(20, size * .12)
-  ctx.fillStyle = '#fff'; ctx.fillRect(image.width - size - pad * 2, image.height - size - pad * 2, size + pad * 2, size + pad * 2)
-  ctx.drawImage(qrCanvas, image.width - size - pad, image.height - size - pad, size, size)
+  const labelHeight = Math.max(34, size * .18)
+  ctx.fillStyle = '#fff'; ctx.fillRect(image.width - size - pad * 2, image.height - size - pad * 2 - labelHeight, size + pad * 2, size + pad * 2 + labelHeight)
+  ctx.drawImage(qrCanvas, image.width - size - pad, image.height - size - pad - labelHeight, size, size)
+  ctx.fillStyle = '#164f45'; ctx.font = `600 ${Math.max(12, size * .055)}px sans-serif`; ctx.textAlign = 'center'
+  ctx.fillText('掃描 QR Code 或點擊電郵內連結報名', image.width - size / 2 - pad, image.height - pad - 6, size + pad)
   const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png', .95))
   return new File([blob], `${file.name.replace(/\.[^.]+$/, '')}-with-registration-qr.png`, { type: 'image/png' })
 }
@@ -194,7 +197,7 @@ function EntityForm({ table, value, lookups, user, close, refresh, notify }) {
       } else if (table === 'announcements') payload = clean({ event_id: form.event_id, subject: form.subject, body_html: form.body_html, status: form.status, scheduled_for: form.scheduled_for, sent_at: form.status === 'sent' ? new Date().toISOString() : null, created_by: user.id })
       else if (table === 'registration_settings') payload = { event_id: form.event_id, form_title: form.form_title, instructions: form.instructions, success_message: form.success_message, require_name_zh: Boolean(form.require_name_zh), require_name_en: Boolean(form.require_name_en), require_email: Boolean(form.require_email), require_phone: Boolean(form.require_phone), require_organization: Boolean(form.require_organization), allow_guest: Boolean(form.allow_guest), is_open: Boolean(form.is_open) }
       else if (table === 'registrations') payload = clean({ event_id: form.event_id, profile_id: form.profile_id || null, attendee_name_zh: form.attendee_name_zh, attendee_name_en: form.attendee_name_en, attendee_email: form.attendee_email, attendee_phone: form.attendee_phone, organization: form.organization, status: form.status, guest_count: Number(form.guest_count), special_requirements: form.special_requirements, source: 'admin' })
-      else if (table === 'members') payload = clean({ profile_id: form.profile_id, membership_number: form.membership_number, organization: form.organization, title: form.title, joined_on: form.joined_on, expires_on: form.expires_on, notes: form.notes })
+      else if (table === 'members') payload = clean({ profile_id: form.profile_id || null, name_zh: form.name_zh, name_en: form.name_en, email: form.email, phone: form.phone, membership_number: form.membership_number, organization: form.organization, title: form.title, joined_on: form.joined_on, expires_on: form.expires_on, member_status: form.member_status, notes: form.notes })
       else if (table === 'attendance') payload = clean({ registration_id: form.registration_id, method: form.method, notes: form.notes, checked_in_by: user.id, checked_in_at: new Date().toISOString() })
       else if (table === 'payments') {
         const reg = lookups.registrations.find(r => r.id === form.registration_id)
@@ -217,7 +220,7 @@ function EntityForm({ table, value, lookups, user, close, refresh, notify }) {
     {table === 'announcements' && <><Input label="相關活動" value={form.event_id} onChange={v => set('event_id', v)} options={events}/><Input label="主旨" required value={form.subject} onChange={v => set('subject', v)}/><Input label="通告內容" required rows={7} value={form.body_html} onChange={v => set('body_html', v)}/><div className="form-grid"><Input label="狀態" value={form.status} onChange={v => set('status', v)} options={enumOpts(['draft','scheduled','sent'])}/><Input label="排程時間" type="datetime-local" value={form.scheduled_for} onChange={v => set('scheduled_for', v)}/></div></>}
     {table === 'registration_settings' && <><Input label="活動" required value={form.event_id} onChange={v => set('event_id', v)} options={events}/><Input label="表格標題" required value={form.form_title} onChange={v => set('form_title', v)}/><Input label="報名說明" rows={4} value={form.instructions} onChange={v => set('instructions', v)}/><Input label="成功訊息" rows={3} value={form.success_message} onChange={v => set('success_message', v)}/><div className="check-grid">{[['require_name_zh','中文姓名必填'],['require_name_en','英文姓名必填'],['require_email','電郵必填'],['require_phone','電話必填'],['require_organization','機構必填'],['allow_guest','接受非會員'],['is_open','開放報名']].map(([key,label]) => <label className="check-field" key={key}><input type="checkbox" checked={Boolean(form[key])} onChange={e => set(key, e.target.checked)}/>{label}</label>)}</div></>}
     {table === 'registrations' && <><Input label="活動" required value={form.event_id} onChange={v => set('event_id', v)} options={events}/><Input label="會員帳戶（非會員可留空）" value={form.profile_id} onChange={v => set('profile_id', v)} options={profiles}/><div className="form-grid"><Input label="中文姓名" value={form.attendee_name_zh} onChange={v => set('attendee_name_zh', v)}/><Input label="英文姓名" value={form.attendee_name_en} onChange={v => set('attendee_name_en', v)}/></div><div className="form-grid"><Input label="電郵" type="email" value={form.attendee_email} onChange={v => set('attendee_email', v)}/><Input label="電話" value={form.attendee_phone} onChange={v => set('attendee_phone', v)}/></div><Input label="公司／機構" value={form.organization} onChange={v => set('organization', v)}/><div className="form-grid"><Input label="狀態" value={form.status} onChange={v => set('status', v)} options={enumOpts(['pending','confirmed','cancelled','waitlisted'])}/><Input label="同行人數" type="number" value={form.guest_count} onChange={v => set('guest_count', v)}/></div><Input label="特別要求" rows={3} value={form.special_requirements} onChange={v => set('special_requirements', v)}/></>}
-    {table === 'members' && <><Input label="用戶帳戶" required value={form.profile_id} onChange={v => set('profile_id', v)} options={profiles}/><Input label="會員編號" required value={form.membership_number} onChange={v => set('membership_number', v)}/><div className="form-grid"><Input label="機構" value={form.organization} onChange={v => set('organization', v)}/><Input label="職銜" value={form.title} onChange={v => set('title', v)}/></div><div className="form-grid"><Input label="加入日期" type="date" required value={form.joined_on} onChange={v => set('joined_on', v)}/><Input label="到期日" type="date" value={form.expires_on} onChange={v => set('expires_on', v)}/></div><Input label="備註" rows={3} value={form.notes} onChange={v => set('notes', v)}/></>}
+    {table === 'members' && <><div className="form-grid"><Input label="中文姓名" required value={form.name_zh} onChange={v => set('name_zh', v)}/><Input label="Name in English" required value={form.name_en} onChange={v => set('name_en', v)}/></div><div className="form-grid"><Input label="電郵地址" type="email" required value={form.email} onChange={v => set('email', v)}/><Input label="手提電話" value={form.phone} onChange={v => set('phone', v)}/></div><Input label="連結用戶帳戶（可選）" value={form.profile_id} onChange={v => set('profile_id', v)} options={profiles}/><Input label="會員編號" required value={form.membership_number} onChange={v => set('membership_number', v)}/><div className="form-grid"><Input label="公司／機構" value={form.organization} onChange={v => set('organization', v)}/><Input label="職位" value={form.title} onChange={v => set('title', v)}/></div><div className="form-grid"><Input label="加入日期" type="date" required value={form.joined_on} onChange={v => set('joined_on', v)}/><Input label="會員狀態" value={form.member_status} onChange={v => set('member_status', v)} options={[{value:'active',label:'有效'},{value:'pending',label:'待確認'},{value:'inactive',label:'停用'}]}/></div><Input label="備註" rows={3} value={form.notes} onChange={v => set('notes', v)}/></>}
     {table === 'attendance' && <><Input label="報名紀錄" required value={form.registration_id} onChange={v => set('registration_id', v)} options={regs}/><Input label="點名方式" value={form.method} onChange={v => set('method', v)} options={enumOpts(['manual','qr','import'])}/><Input label="備註" rows={3} value={form.notes} onChange={v => set('notes', v)}/></>}
     {table === 'payments' && <><Input label="報名紀錄" required value={form.registration_id} onChange={v => set('registration_id', v)} options={regs}/><div className="form-grid"><Input label="金額（HKD）" type="number" required value={form.amount} onChange={v => set('amount', v)}/><Input label="狀態" value={form.status} onChange={v => set('status', v)} options={enumOpts(['pending','paid','failed','refunded','waived'])}/></div><div className="form-grid"><Input label="付款方式" value={form.provider} onChange={v => set('provider', v)} options={enumOpts(['manual','cash','bank_transfer','cheque','stripe'])}/><Input label="交易編號" value={form.provider_reference} onChange={v => set('provider_reference', v)}/></div><Input label="收據（圖片/PDF）" type="file" accept="image/*,.pdf" onChange={v => set('receipt', v)}/></>}
     {table === 'profiles' && <><div className="form-grid"><Input label="中文姓名" value={form.full_name_zh} onChange={v => set('full_name_zh', v)}/><Input label="Name in English" value={form.full_name_en} onChange={v => set('full_name_en', v)}/></div><Input label="显示姓名" required value={form.full_name} onChange={v => set('full_name', v)}/><Input label="電話" value={form.phone} onChange={v => set('phone', v)}/><div className="form-grid"><Input label="權限" value={form.role} onChange={v => set('role', v)} options={enumOpts(['admin','staff','member'])}/><Input label="狀態" value={form.status} onChange={v => set('status', v)} options={enumOpts(['active','inactive','suspended'])}/></div></>}
@@ -247,12 +250,109 @@ function Dashboard({ data, setActive }) {
     <article className="card quick-card"><p className="eyebrow">快捷操作</p><h2>日常營運</h2><div className="quick-stack"><button onClick={() => setActive('參加者')}><Users size={18}/>管理報名</button><button onClick={() => setActive('點名')}><ClipboardCheck size={18}/>現場點名</button><button onClick={() => setActive('付款')}><WalletCards size={18}/>付款紀錄</button></div></article></div></>
 }
 
+function MemberDirectory({ data, user, profile, refresh, notify }) {
+  const [editing, setEditing] = useState(null)
+  const [search, setSearch] = useState('')
+  const rows = data.members.filter(row => JSON.stringify(row).toLowerCase().includes(search.toLowerCase()))
+  const active = data.members.filter(row => row.member_status === 'active').length
+  return <div className="feature-page">
+    <div className="feature-head"><div><p className="eyebrow">MEMBER DATABASE</p><h2>會員名錄</h2><span>會員資料可獨立建立，不需要先開設登入帳戶。</span></div><button className="primary" onClick={() => setEditing({})}><Plus size={17}/>新增會員</button></div>
+    <div className="stat-grid mini-stats"><article className="stat-card"><span className="icon-box green"><Users size={20}/></span><div><p>會員總數</p><strong>{data.members.length}</strong></div></article><article className="stat-card"><span className="icon-box blue"><Check size={20}/></span><div><p>有效會員</p><strong>{active}</strong></div></article><article className="stat-card"><span className="icon-box orange"><UserPlus size={20}/></span><div><p>待確認資料</p><strong>{data.members.filter(x => x.member_status === 'pending').length}</strong></div></article></div>
+    <article className="card directory-card"><div className="manager-actions"><label className="mini-search"><Search size={15}/><input placeholder="搜尋姓名、公司、電郵或會員編號..." value={search} onChange={e => setSearch(e.target.value)}/></label></div>
+      <div className="table-scroll"><table className="directory-table"><thead><tr><th>會員</th><th>公司及職位</th><th>聯絡資料</th><th>入會日期</th><th>狀態</th><th>操作</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td><b>{row.name_zh || row.profiles?.full_name_zh || '—'}</b><small>{row.name_en || row.profiles?.full_name_en || row.profiles?.full_name || '—'} · {row.membership_number}</small></td><td>{row.organization || '—'}<small>{row.title || '—'}</small></td><td>{row.phone || row.profiles?.phone || '—'}<small>{row.email || row.profiles?.email || '—'}</small></td><td>{row.joined_on || '—'}</td><td><span className="status">{row.member_status === 'active' ? '有效' : row.member_status === 'pending' ? '待確認' : '停用'}</span></td><td><button className="icon-action" onClick={() => setEditing(row)}><Pencil size={16}/></button></td></tr>)}</tbody></table></div>
+    </article>
+    {editing && <Modal title={editing.id ? '編輯會員' : '新增會員'} close={() => setEditing(null)}><EntityForm table="members" value={editing.id ? editing : null} lookups={data} user={user} close={() => setEditing(null)} refresh={refresh} notify={notify}/></Modal>}
+  </div>
+}
+
+function AttendanceBoard({ data, user, refresh, notify }) {
+  const event = data.events.find(x => x.status === 'open') || data.events[0]
+  const rows = data.registrations.filter(x => !event || x.event_id === event.id)
+  const checked = new Map(data.attendance.map(x => [x.registration_id, x]))
+  async function toggle(row) {
+    const current = checked.get(row.id)
+    const result = current
+      ? await supabase.from('attendance').delete().eq('id', current.id)
+      : await supabase.from('attendance').insert({ registration_id: row.id, checked_in_by: user.id, method: 'manual' })
+    if (result.error) notify(result.error.message, 'error'); else { notify(current ? '已取消點名' : '已完成點名'); refresh() }
+  }
+  return <div className="feature-page attendance-page"><div className="feature-head"><div><p className="eyebrow">ATTENDANCE</p><h2>即場點名</h2><span>{event?.title || '所有活動'} · {event ? fmtDate(event.starts_at) : ''}</span></div><button className="secondary print-hide" onClick={() => window.print()}><Download size={17}/>列印點名表</button></div>
+    <article className="card checkin-list">{rows.length ? rows.map(row => { const name = row.attendee_name_zh || row.attendee_name_en || row.profiles?.full_name || row.profiles?.email || '參加者'; const done = checked.has(row.id); const paid = data.payments.some(p => p.registration_id === row.id && p.status === 'paid'); return <div className="checkin-row" key={row.id}><span className="avatar">{name.slice(0,1)}</span><div><b>{name}</b><small>{row.qr_token?.slice(0,8).toUpperCase()} · {row.attendee_phone || '沒有電話'}</small></div><span className={`payment-pill ${paid ? 'paid' : ''}`}>{paid ? '已付款' : '待付款'}</span><button className={done ? 'checked-button' : 'primary'} onClick={() => toggle(row)}>{done ? <><Check size={16}/>已點名</> : '點名'}</button></div>}) : <p className="empty">這個活動暫時未有報名紀錄。</p>}</article>
+  </div>
+}
+
+async function qrDataUrl(url) {
+  const holder = document.createElement('div')
+  new window.QRCode(holder, { text: url, width: 500, height: 500 })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  return holder.querySelector('canvas')?.toDataURL('image/png')
+}
+
+async function createDigitalNotice(file, url) {
+  const qrUrl = await qrDataUrl(url)
+  if (file.type === 'application/pdf' && window.PDFLib && qrUrl) {
+    const pdf = await window.PDFLib.PDFDocument.load(await file.arrayBuffer())
+    const page = pdf.getPages()[0], qrBytes = await (await fetch(qrUrl)).arrayBuffer(), qr = await pdf.embedPng(qrBytes)
+    const size = Math.min(page.getWidth(), page.getHeight()) * .18, pad = 18
+    page.drawRectangle({ x: page.getWidth() - size - pad * 2, y: pad, width: size + pad * 2, height: size + pad * 2 + 18, color: window.PDFLib.rgb(1,1,1) })
+    page.drawImage(qr, { x: page.getWidth() - size - pad, y: pad + 18, width: size, height: size })
+    page.drawText('Registration link', { x: page.getWidth() - size - pad, y: pad + 5, size: 8, color: window.PDFLib.rgb(.05,.3,.26) })
+    return new File([await pdf.save()], `${file.name.replace(/\.pdf$/i,'')}-with-QR.pdf`, { type: 'application/pdf' })
+  }
+  return addQrToPoster(file, url)
+}
+
+function NoticePublisher({ data, user, refresh, notify }) {
+  const [eventId, setEventId] = useState(data.events.find(x => x.status === 'open')?.id || data.events[0]?.id || '')
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('各位會員：\n\n誠邀閣下參加以下活動。詳情請參閱通告，並點擊報名連結或掃描 QR Code 完成報名。\n\n期待與您見面！')
+  const [file, setFile] = useState(null), [generated, setGenerated] = useState(null), [preview, setPreview] = useState(''), [busy, setBusy] = useState(false)
+  const event = data.events.find(x => x.id === eventId)
+  const registrationUrl = event ? `${location.origin}/?register=${event.slug}` : ''
+  const recipients = data.members.filter(x => x.member_status !== 'inactive').map(x => x.email || x.profiles?.email).filter(Boolean)
+  async function generate() {
+    if (!file || !event) return
+    setBusy(true)
+    try {
+      const result = await createDigitalNotice(file, registrationUrl)
+      setGenerated(result)
+      if (preview) URL.revokeObjectURL(preview)
+      setPreview(result.type.startsWith('image/') ? URL.createObjectURL(result) : '')
+      notify('已產生包含 QR Code 的數碼通告')
+    } catch (err) { notify(err.message, 'error') } finally { setBusy(false) }
+  }
+  function download() {
+    if (!generated) return
+    const a = document.createElement('a'); a.href = URL.createObjectURL(generated); a.download = generated.name; a.click()
+  }
+  async function saveAndEmail() {
+    if (!generated || !event) return
+    setBusy(true)
+    try {
+      const path = `notices/${Date.now()}-${generated.name.replace(/[^\w.-]/g,'-')}`
+      const up = await supabase.storage.from('event-posters').upload(path, generated, { upsert: true })
+      if (up.error) throw up.error
+      const result = await supabase.from('announcements').insert({ event_id: event.id, subject: subject || `誠邀出席｜${event.title}`, body_html: body.replaceAll('\n','<br>'), attachment_path: path, registration_url: registrationUrl, recipient_group: 'all_active_members', status: 'sent', sent_at: new Date().toISOString(), created_by: user.id })
+      if (result.error) throw result.error
+      download()
+      const mailBody = `${body}\n\n網上報名：${registrationUrl}\n\n數碼通告已下載，請加入電郵附件。`
+      location.href = `mailto:?bcc=${encodeURIComponent(recipients.join(','))}&subject=${encodeURIComponent(subject || `誠邀出席｜${event.title}`)}&body=${encodeURIComponent(mailBody)}`
+      notify('通告已儲存，並已開啟電郵草稿'); refresh()
+    } catch (err) { notify(err.message, 'error') } finally { setBusy(false) }
+  }
+  return <div className="feature-page"><div className="feature-head"><div><p className="eyebrow">NOTICE PUBLISHER</p><h2>活動通告發佈</h2><span>上載通告或 Poster，自動加入報名 QR Code，再以電郵發送給會員。</span></div><span className="recipient-count">會員名單 {recipients.length} 人</span></div>
+    <div className="notice-steps"><span><b>1</b>上載通告</span><span><b>2</b>加入 QR Code</span><span><b>3</b>電郵發佈</span></div>
+    <div className="notice-grid"><article className="card notice-editor"><p className="eyebrow">POSTER EDITOR</p><h2>通告及 QR Code</h2><Input label="活動" value={eventId} onChange={setEventId} options={data.events.map(x => ({value:x.id,label:x.title}))}/><Input label="上載活動通告或 Poster（JPG、PNG、PDF）" type="file" accept="image/*,.pdf" onChange={setFile}/><small>系統會在右下角加入 QR Code；會員亦可直接點擊電郵內的報名網址。</small>{preview && <img className="notice-preview" src={preview} alt="已加入 QR Code 的通告預覽"/>}{generated && !preview && <div className="pdf-ready"><FileText size={32}/>PDF 通告已加入 QR Code</div>}<div className="notice-actions"><button className="primary" disabled={!file || busy} onClick={generate}><QrCode size={17}/>{busy ? '處理中…' : '產生數碼通告'}</button><button className="secondary" disabled={!generated} onClick={download}><Download size={17}/>下載</button></div></article>
+      <aside className="card email-panel"><p className="eyebrow">EMAIL DELIVERY</p><h2>電郵發佈</h2><Input label="電郵主旨" value={subject} onChange={setSubject}/><Input label="電郵內容" rows={8} value={body} onChange={setBody}/><div className="registration-link"><b>專屬報名頁</b><a href={registrationUrl} target="_blank">{registrationUrl || '請先選擇活動'}</a></div><div className="email-summary"><span><b>{recipients.length}</b> 預計收件人</span><span><b>{generated ? '✓' : '—'}</b> 數碼通告</span></div><button className="primary wide" disabled={!generated || !recipients.length || busy} onClick={saveAndEmail}><Mail size={17}/>下載通告並開啟電郵發送</button><small>系統會預填會員 BCC、主旨、內容及可點擊報名連結；數碼通告會同時下載，供加入附件。</small></aside></div>
+  </div>
+}
+
 function RowContent({ table, row }) {
   if (table === 'events') return <><b>{row.title}</b><span>{fmtDate(row.starts_at)} · {row.venue || '地點待定'}</span><em>{row.status} · {money(row.fee_cents)}</em></>
   if (table === 'registration_settings') return <><b>{row.events?.title || '活動報名設定'}</b><span>{row.form_title}</span><em>{row.is_open ? '開放報名' : '暫停報名'}</em></>
   if (table === 'announcements') return <><b>{row.subject}</b><span>{row.events?.title || '一般通告'} · {fmtDate(row.scheduled_for || row.sent_at)}</span><em>{row.status}</em></>
   if (table === 'registrations') return <><b>{row.attendee_name_zh || row.attendee_name_en || row.profiles?.full_name || row.profiles?.email || '非會員參加者'}</b><span>{row.attendee_email || row.profiles?.email || '沒有電郵'} · {row.events?.title} · {fmtDate(row.registered_at)}</span><em>{row.status}</em></>
-  if (table === 'members') return <><b>{row.profiles?.full_name || row.profiles?.email}</b><span>{row.membership_number} · {row.organization || '—'}</span><em>{row.expires_on ? `到期 ${row.expires_on}` : '永久'}</em></>
+  if (table === 'members') return <><b>{[row.name_zh, row.name_en].filter(Boolean).join(' / ') || row.profiles?.full_name || row.profiles?.email}</b><span>{row.membership_number} · {row.organization || '—'}</span><em>{row.member_status || 'active'}</em></>
   if (table === 'attendance') return <><b>{row.registrations?.attendee_name_zh || row.registrations?.attendee_name_en || row.registrations?.profiles?.full_name || row.registrations?.profiles?.email || '參加者'}</b><span>{row.registrations?.events?.title} · {fmtDate(row.checked_in_at)}</span><em>{row.method}</em></>
   if (table === 'payments') return <><b>{row.registrations?.attendee_name_zh || row.registrations?.attendee_name_en || row.profiles?.full_name || row.profiles?.email || '付款人'}</b><span>{money(row.amount_cents)} · {row.provider || '—'} · {fmtDate(row.paid_at)}</span><em>{row.status}</em></>
   return <><b>{[row.full_name_zh, row.full_name_en].filter(Boolean).join(' / ') || row.full_name || row.email}</b><span>{row.email} · {row.phone || '—'}</span><em>{row.role} · {row.status}</em></>
@@ -341,7 +441,7 @@ function App() {
       supabase.from('events').select('*').order('starts_at'),
       supabase.from('profiles').select('*').order('full_name'),
       supabase.from('registrations').select('*, profiles(full_name,full_name_zh,full_name_en,email), events(title,fee_cents)').order('registered_at', { ascending: false }),
-      supabase.from('members').select('*, profiles(full_name,email)').order('created_at', { ascending: false }),
+      supabase.from('members').select('*, profiles(full_name,full_name_zh,full_name_en,email,phone)').order('created_at', { ascending: false }),
       supabase.from('attendance').select('*, registrations(attendee_name_zh,attendee_name_en,profiles(full_name,email),events(title))').order('checked_in_at', { ascending: false }),
       supabase.from('payments').select('*, profiles(full_name,email), registrations(attendee_name_zh,attendee_name_en,attendee_email)').order('created_at', { ascending: false }),
       supabase.from('announcements').select('*, events(title)').order('created_at', { ascending: false }),
@@ -361,7 +461,7 @@ function App() {
   const table = pageTable[active]
   return <div className="app-shell"><Sidebar open={menu} close={() => setMenu(false)} active={active} setActive={setActive} profile={profile}/><main>
     <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● 雲端已同步</span></div></header>
-    <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '報表' ? <Reports data={data}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
+    <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '報表' ? <Reports data={data}/> : active === '會員名錄' ? <MemberDirectory data={data} user={session.user} profile={profile} refresh={refresh} notify={notify}/> : active === '點名' ? <AttendanceBoard data={data} user={session.user} refresh={refresh} notify={notify}/> : active === '通告發佈' ? <NoticePublisher data={data} user={session.user} refresh={refresh} notify={notify}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
     <Toast toast={toast}/>
   </main></div>
 }
