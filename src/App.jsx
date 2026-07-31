@@ -697,6 +697,7 @@ function App() {
   const [selectedEventId, setSelectedEventId] = useState('')
   const [menu, setMenu] = useState(false)
   const [profile, setProfile] = useState(null)
+  const [accessIssue, setAccessIssue] = useState('')
   const [data, setData] = useState({ events: [], profiles: [], registrations: [], members: [], attendance: [], payments: [], announcements: [], registration_settings: [], email_send_logs: [], user_invitations: [] })
   const [toast, setToast] = useState(null)
   const notify = (text, type = 'success') => { setToast({ text, type }); setTimeout(() => setToast(null), 3500) }
@@ -711,6 +712,7 @@ function App() {
   }, [])
   async function refresh() {
     if (!session) return
+    setAccessIssue('')
     let currentProfile = null, profileError = null
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const result = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()
@@ -718,10 +720,12 @@ function App() {
       if (currentProfile || profileError) break
       await new Promise(resolve => setTimeout(resolve, 300))
     }
-    if (profileError) { notify(`未能驗證用戶權限：${profileError.message}`, 'error'); return }
-    if (!currentProfile) { notify('找不到此登入帳戶的用戶資料，請聯絡程式管理員。', 'error'); return }
+    if (profileError) { setAccessIssue(`未能讀取用戶資料：${profileError.message}`); return }
+    if (!currentProfile) { setAccessIssue(`找不到 ${session.user.email} 的用戶資料。請管理員檢查「用戶及權限」記錄。`); return }
     if (!['admin','staff'].includes(currentProfile.role) || currentProfile.status !== 'active') {
-      await supabase.auth.signOut(); setSession(null); setProfile(null); return
+      setProfile(currentProfile)
+      setAccessIssue(`帳戶已登入，但後台權限資料不正確。現在角色：${currentProfile.role || '未設定'}；狀態：${currentProfile.status || '未設定'}。請管理員把角色設定為 User 或程式管理員，並把狀態設定為 active。`)
+      return
     }
     const queries = await Promise.all([
       supabase.from('events').select('*').order('starts_at'),
@@ -747,6 +751,7 @@ function App() {
   if (inviteToken) return <InvitationSignup token={inviteToken}/>
   if (checking) return <div className="loading-page">正在載入 EventFlow…</div>
   if (!session) return <Login/>
+  if (accessIssue) return <div className="auth-page"><section className="auth-card access-issue"><div className="auth-brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span></div><h1>帳戶已登入</h1><p>{accessIssue}</p><div className="access-details"><span>登入電郵</span><b>{session.user.email}</b>{profile&&<><span>資料庫角色／狀態</span><b>{profile.role} / {profile.status}</b></>}</div><button className="secondary wide" onClick={()=>refresh()}>重新檢查權限</button><button className="logout-link" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/>登出其他帳戶</button></section></div>
   const table = pageTable[active]
   return <div className="app-shell"><Sidebar open={menu} close={() => setMenu(false)} active={active} setActive={setActive} profile={profile}/><main>
     <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● 雲端已同步</span><button className="top-logout" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/>登出</button></div></header>
