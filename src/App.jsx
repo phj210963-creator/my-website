@@ -498,8 +498,9 @@ function NoticePublisher({ data, user, refresh, notify, selectedEventId, setSele
 }
 
 function UserAdministration({ data, user, refresh, notify }) {
-  const [inviteOpen,setInviteOpen]=useState(false), [editing,setEditing]=useState(null)
+  const [inviteOpen,setInviteOpen]=useState(false), [editing,setEditing]=useState(null), [editingInvite,setEditingInvite]=useState(null)
   const [form,setForm]=useState({full_name:'',email:'',role:'staff'})
+  const pendingInvitations=(data.user_invitations||[]).filter(invite=>invite.status==='pending')
   async function invite(e){
     e.preventDefault()
     const token=crypto.randomUUID()
@@ -509,7 +510,7 @@ function UserAdministration({ data, user, refresh, notify }) {
     const subject='EventFlow 後台帳戶邀請'
     const body=`${form.full_name}：\n\n你已獲邀成為 EventFlow 的「${roleLabel}」。請使用以下專屬連結，以 ${form.email} 作為登入名稱並自行設定密碼：\n\n${link}\n\n邀請連結有效期為 7 日。`
     location.href=`mailto:${encodeURIComponent(form.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
-    notify('邀請已建立，並已開啟邀請電郵'); setInviteOpen(false); setForm({full_name:'',email:'',role:'staff'})
+    notify('邀請已建立，並已開啟邀請電郵'); setInviteOpen(false); setForm({full_name:'',email:'',role:'staff'}); await refresh()
   }
   async function saveUser(e){
     e.preventDefault()
@@ -522,11 +523,23 @@ function UserAdministration({ data, user, refresh, notify }) {
     const {error}=await supabase.from('profiles').update({status:'inactive',role:'member'}).eq('id',profile.id)
     if(error)notify(error.message,'error');else{notify('用戶存取權已刪除');refresh()}
   }
+  async function saveInvitation(e){
+    e.preventDefault()
+    const {error}=await supabase.from('user_invitations').update({full_name:editingInvite.full_name,email:editingInvite.email.toLowerCase(),role:editingInvite.role}).eq('id',editingInvite.id).eq('status','pending')
+    if(error)notify(error.message,'error');else{notify('待接受邀請已更新');setEditingInvite(null);await refresh()}
+  }
+  async function removeInvitation(invite){
+    if(!confirm(`確定刪除寄給 ${invite.email} 的待接受邀請？`))return
+    const {error}=await supabase.from('user_invitations').delete().eq('id',invite.id).eq('status','pending')
+    if(error)notify(error.message,'error');else{notify('待接受邀請已刪除');await refresh()}
+  }
   return <div className="feature-page"><div className="feature-head"><div><p className="eyebrow">ACCESS CONTROL</p><h2>用戶及權限</h2><span>只有程式管理員可邀請、編輯及刪除後台用戶。</span></div><button className="primary" onClick={()=>setInviteOpen(true)}><Mail size={17}/>邀請用戶</button></div>
     <div className="permission-cards"><article className="card"><ShieldCheck size={24}/><h3>程式管理員</h3><p>可使用所有功能，並管理、邀請及刪除用戶。</p></article><article className="card"><Users size={24}/><h3>User</h3><p>可進入所有營運功能，輸入及編輯資料，但不能管理用戶。</p></article><article className="card"><QrCode size={24}/><h3>會員參加者</h3><p>不建立後台帳戶，只能透過公開連結或 QR Code 報名。</p></article></div>
     <article className="card directory-card"><div className="table-scroll"><table className="directory-table"><thead><tr><th>姓名</th><th>登入電郵</th><th>權限</th><th>狀態</th><th>操作</th></tr></thead><tbody>{data.profiles.filter(p=>['admin','staff'].includes(p.role)).map(p=><tr key={p.id}><td><b>{p.full_name||'—'}</b></td><td>{p.email}</td><td><span className="status">{p.role==='admin'?'程式管理員':'User'}</span></td><td>{p.status}</td><td><div className="row-buttons"><button title="編輯" onClick={()=>setEditing({...p})}><Pencil size={16}/></button><button title="刪除" className="danger" disabled={p.id===user.id} onClick={()=>remove(p)}><Trash2 size={16}/></button></div></td></tr>)}</tbody></table></div></article>
+    <article className="card directory-card pending-invitations"><div className="section-table-head"><div><p className="eyebrow">PENDING INVITATIONS</p><h3>待接受邀請</h3><span>已發出但尚未完成註冊的用戶邀請。</span></div><b>{pendingInvitations.length} 個 Pending</b></div><div className="table-scroll"><table className="directory-table"><thead><tr><th>姓名</th><th>受邀電郵</th><th>預設權限</th><th>狀態</th><th>邀請日期／到期日</th><th>操作</th></tr></thead><tbody>{pendingInvitations.map(invite=><tr key={invite.id}><td><b>{invite.full_name||'—'}</b></td><td>{invite.email}</td><td><span className="status">{invite.role==='admin'?'程式管理員':'User'}</span></td><td><span className="pending-pill">Pending</span></td><td>{fmtDate(invite.created_at)}<small>到期：{fmtDate(invite.expires_at)}</small></td><td><div className="row-buttons"><button title="編輯待接受邀請" onClick={()=>setEditingInvite({...invite})}><Pencil size={16}/></button><button title="刪除待接受邀請" className="danger" onClick={()=>removeInvitation(invite)}><Trash2 size={16}/></button></div></td></tr>)}</tbody></table></div>{!pendingInvitations.length&&<p className="empty">目前沒有待接受邀請。</p>}</article>
     {inviteOpen&&<Modal title="邀請後台用戶" close={()=>setInviteOpen(false)}><form className="data-form" onSubmit={invite}><Input label="用戶姓名" required value={form.full_name} onChange={v=>setForm(f=>({...f,full_name:v}))}/><Input label="登入電郵（Username）" type="email" required value={form.email} onChange={v=>setForm(f=>({...f,email:v}))}/><Input label="權限" required value={form.role} onChange={v=>setForm(f=>({...f,role:v}))} options={[{value:'admin',label:'程式管理員'},{value:'staff',label:'User'}]}/><p className="form-help">受邀者會透過專屬連結自行設定密碼。</p><button className="primary wide">建立並發送邀請</button></form></Modal>}
     {editing&&<Modal title="編輯後台用戶" close={()=>setEditing(null)}><form className="data-form" onSubmit={saveUser}><Input label="姓名" required value={editing.full_name} onChange={v=>setEditing(f=>({...f,full_name:v}))}/><Input label="登入電郵" value={editing.email} onChange={()=>{}}/><Input label="權限" value={editing.role} onChange={v=>setEditing(f=>({...f,role:v}))} options={[{value:'admin',label:'程式管理員'},{value:'staff',label:'User'}]}/><Input label="狀態" value={editing.status} onChange={v=>setEditing(f=>({...f,status:v}))} options={[{value:'active',label:'有效'},{value:'inactive',label:'停用'}]}/><button className="primary wide">儲存</button></form></Modal>}
+    {editingInvite&&<Modal title="編輯待接受邀請" close={()=>setEditingInvite(null)}><form className="data-form" onSubmit={saveInvitation}><Input label="用戶姓名" required value={editingInvite.full_name} onChange={v=>setEditingInvite(f=>({...f,full_name:v}))}/><Input label="受邀電郵（Username）" type="email" required value={editingInvite.email} onChange={v=>setEditingInvite(f=>({...f,email:v}))}/><Input label="預設權限" required value={editingInvite.role} onChange={v=>setEditingInvite(f=>({...f,role:v}))} options={[{value:'admin',label:'程式管理員'},{value:'staff',label:'User'}]}/><p className="form-help">此修改只適用於尚未完成註冊的邀請。</p><button className="primary wide">儲存邀請資料</button></form></Modal>}
   </div>
 }
 
@@ -684,7 +697,7 @@ function App() {
   const [selectedEventId, setSelectedEventId] = useState('')
   const [menu, setMenu] = useState(false)
   const [profile, setProfile] = useState(null)
-  const [data, setData] = useState({ events: [], profiles: [], registrations: [], members: [], attendance: [], payments: [], announcements: [], registration_settings: [], email_send_logs: [] })
+  const [data, setData] = useState({ events: [], profiles: [], registrations: [], members: [], attendance: [], payments: [], announcements: [], registration_settings: [], email_send_logs: [], user_invitations: [] })
   const [toast, setToast] = useState(null)
   const notify = (text, type = 'success') => { setToast({ text, type }); setTimeout(() => setToast(null), 3500) }
   useEffect(() => {
@@ -710,8 +723,9 @@ function App() {
       supabase.from('announcements').select('*, events(title)').order('created_at', { ascending: false }),
       supabase.from('registration_settings').select('*, events(title)').order('updated_at', { ascending: false }),
       supabase.from('email_send_logs').select('*').order('sent_at', { ascending: false }),
+      supabase.from('user_invitations').select('*').order('created_at', { ascending: false }),
     ])
-    const next = { events: queries[0].data || [], profiles: queries[1].data || [], registrations: queries[2].data || [], members: queries[3].data || [], attendance: queries[4].data || [], payments: queries[5].data || [], announcements: queries[6].data || [], registration_settings: queries[7].data || [], email_send_logs: queries[8].data || [] }
+    const next = { events: queries[0].data || [], profiles: queries[1].data || [], registrations: queries[2].data || [], members: queries[3].data || [], attendance: queries[4].data || [], payments: queries[5].data || [], announcements: queries[6].data || [], registration_settings: queries[7].data || [], email_send_logs: queries[8].data || [], user_invitations: queries[9].data || [] }
     const currentProfile = next.profiles.find(p => p.id === session.user.id) || null
     if (!currentProfile || !['admin','staff'].includes(currentProfile.role) || currentProfile.status !== 'active') {
       sessionStorage.removeItem('eventflow_authenticated'); await supabase.auth.signOut(); setSession(null); setProfile(null); return
