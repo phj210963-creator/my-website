@@ -635,8 +635,8 @@ function exportCsv(name, rows) {
 }
 
 function receivableRows(data, eventId = '') {
-  return data.registrations.filter(r => r.status !== 'cancelled' && (!eventId || r.event_id === eventId)).map(r => {
-    const expected = Number(r.events?.fee_cents || 0) * (Number(r.guest_count || 0) + 1)
+  return data.registrations.filter(r => r.status === 'confirmed' && (!eventId || r.event_id === eventId)).map(r => {
+    const expected = Number(r.events?.fee_cents || 0)
     const paid = data.payments.filter(p => p.registration_id === r.id && p.status === 'paid').reduce((sum, p) => sum + Number(p.amount_cents || 0), 0)
     return {
       registration_id: r.id,
