@@ -53,7 +53,7 @@ function Login() {
     const result = await supabase.auth.signInWithPassword({ email: form.email, password: form.password })
     setBusy(false)
     if (result.error) setMessage(result.error.message)
-    else sessionStorage.setItem('eventflow_authenticated', '1')
+    else setMessage('')
   }
   return <div className="auth-page"><section className="auth-card">
     <div className="auth-brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span></div>
@@ -81,7 +81,7 @@ function InvitationSignup({ token }) {
     setState(s=>({...s,busy:true,error:''}))
     const {error}=await supabase.auth.signUp({email:invite.email,password:form.password,options:{data:{full_name:form.full_name}}})
     if(error) setState(s=>({...s,busy:false,error:error.message}))
-    else { sessionStorage.removeItem('eventflow_authenticated'); setState(s=>({...s,busy:false,done:true})) }
+    else { setState(s=>({...s,busy:false,done:true})) }
   }
   if(state.loading)return <div className="loading-page">正在驗證邀請…</div>
   return <div className="auth-page"><section className="auth-card"><div className="auth-brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span></div>{state.done?<><h1>帳戶已建立</h1><p>電郵已透過邀請連結完成驗證。現在可使用電郵及剛設定的密碼登入。</p><a className="primary link-button" href="/">前往登入</a></>:<><h1>接受後台邀請</h1>{invite&&<p>{invite.email} · {invite.role==='admin'?'程式管理員':'User'}</p>}<form onSubmit={submit}><Input label="姓名" required value={form.full_name} onChange={v=>setForm(f=>({...f,full_name:v}))}/><Input label="自行設定密碼" type="password" required value={form.password} onChange={v=>setForm(f=>({...f,password:v}))}/><Input label="再次輸入密碼" type="password" required value={form.confirm} onChange={v=>setForm(f=>({...f,confirm:v}))}/>{state.error&&<div className="form-message">{state.error}</div>}<button className="primary wide" disabled={!invite||state.busy}>{state.busy?'建立中…':'建立帳戶'}</button></form></>}</section></div>
@@ -148,7 +148,7 @@ function Sidebar({ open, close, active, setActive, profile }) {
     <aside className={`sidebar ${open ? 'open' : ''}`}>
       <div className="brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span><button className="mobile-close" onClick={close}><X size={20}/></button></div>
       <nav>{visibleItems.map(([Icon, label]) => <button key={label} className={active === label ? 'active' : ''} onClick={() => { setActive(label); close() }}><Icon size={19}/><span>{label}</span></button>)}</nav>
-      <div className="profile"><p>目前權限</p><span className="role">{profile?.role === 'admin' ? '程式管理員' : 'User'}</span><div className="profile-row"><span className="avatar">{initials}</span><span><b>{profile?.full_name || 'EventFlow 用戶'}</b><small>{profile?.email}</small></span></div><button className="logout" onClick={() => {sessionStorage.removeItem('eventflow_authenticated');supabase.auth.signOut()}}><LogOut size={17}/>登出</button></div>
+      <div className="profile"><p>目前權限</p><span className="role">{profile?.role === 'admin' ? '程式管理員' : 'User'}</span><div className="profile-row"><span className="avatar">{initials}</span><span><b>{profile?.full_name || 'EventFlow 用戶'}</b><small>{profile?.email}</small></span></div><button className="logout" onClick={() => supabase.auth.signOut()}><LogOut size={17}/>登出</button></div>
     </aside></>
 }
 
@@ -702,10 +702,8 @@ function App() {
   const notify = (text, type = 'success') => { setToast({ text, type }); setTimeout(() => setToast(null), 3500) }
   useEffect(() => {
     if (!isConfigured) { setChecking(false); return }
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (data.session && !sessionStorage.getItem('eventflow_authenticated')) {
-        await supabase.auth.signOut(); setSession(null)
-      } else setSession(data.session)
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
       setChecking(false)
     })
     const { data } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
@@ -713,6 +711,18 @@ function App() {
   }, [])
   async function refresh() {
     if (!session) return
+    let currentProfile = null, profileError = null
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()
+      currentProfile = result.data; profileError = result.error
+      if (currentProfile || profileError) break
+      await new Promise(resolve => setTimeout(resolve, 300))
+    }
+    if (profileError) { notify(`未能驗證用戶權限：${profileError.message}`, 'error'); return }
+    if (!currentProfile) { notify('找不到此登入帳戶的用戶資料，請聯絡程式管理員。', 'error'); return }
+    if (!['admin','staff'].includes(currentProfile.role) || currentProfile.status !== 'active') {
+      await supabase.auth.signOut(); setSession(null); setProfile(null); return
+    }
     const queries = await Promise.all([
       supabase.from('events').select('*').order('starts_at'),
       supabase.from('profiles').select('*').order('full_name'),
@@ -723,13 +733,9 @@ function App() {
       supabase.from('announcements').select('*, events(title)').order('created_at', { ascending: false }),
       supabase.from('registration_settings').select('*, events(title)').order('updated_at', { ascending: false }),
       supabase.from('email_send_logs').select('*').order('sent_at', { ascending: false }),
-      supabase.from('user_invitations').select('*').order('created_at', { ascending: false }),
+      currentProfile.role === 'admin' ? supabase.from('user_invitations').select('*').order('created_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
     ])
     const next = { events: queries[0].data || [], profiles: queries[1].data || [], registrations: queries[2].data || [], members: queries[3].data || [], attendance: queries[4].data || [], payments: queries[5].data || [], announcements: queries[6].data || [], registration_settings: queries[7].data || [], email_send_logs: queries[8].data || [], user_invitations: queries[9].data || [] }
-    const currentProfile = next.profiles.find(p => p.id === session.user.id) || null
-    if (!currentProfile || !['admin','staff'].includes(currentProfile.role) || currentProfile.status !== 'active') {
-      sessionStorage.removeItem('eventflow_authenticated'); await supabase.auth.signOut(); setSession(null); setProfile(null); return
-    }
     setData(next); setProfile(currentProfile)
     const err = queries.find(q => q.error)?.error; if (err) notify(err.message, 'error')
   }
@@ -743,7 +749,7 @@ function App() {
   if (!session) return <Login/>
   const table = pageTable[active]
   return <div className="app-shell"><Sidebar open={menu} close={() => setMenu(false)} active={active} setActive={setActive} profile={profile}/><main>
-    <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● 雲端已同步</span><button className="top-logout" onClick={()=>{sessionStorage.removeItem('eventflow_authenticated');supabase.auth.signOut()}}><LogOut size={16}/>登出</button></div></header>
+    <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● 雲端已同步</span><button className="top-logout" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/>登出</button></div></header>
     <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '活動管理' ? <EventCenter data={data} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId} setActive={setActive} user={session.user} refresh={refresh} notify={notify}/> : active === '參加者' ? <ParticipantBoard data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '報表' ? <Reports data={data} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '會員名錄' ? <MemberDirectory data={data} user={session.user} profile={profile} refresh={refresh} notify={notify}/> : active === '點名' ? <AttendanceBoard data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '通告發佈' ? <NoticePublisher data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '付款' ? <PaymentBoard data={data} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '用戶及權限' ? <UserAdministration data={data} user={session.user} refresh={refresh} notify={notify}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
     <Toast toast={toast}/>
   </main></div>
