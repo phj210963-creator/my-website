@@ -579,19 +579,21 @@ function QrPanel({ value }) {
   return <div className="qr-panel"><div ref={ref}/><p>{value}</p><button className="secondary" onClick={() => navigator.clipboard.writeText(value)}>複製連結</button></div>
 }
 
-function EventCenter({ data, selectedEventId, setSelectedEventId, setActive }) {
+function EventCenter({ data, selectedEventId, setSelectedEventId, setActive, user, refresh, notify }) {
   const [detailOpen, setDetailOpen] = useState(Boolean(selectedEventId))
+  const [editing, setEditing] = useState(null)
   const event = data.events.find(x => x.id === selectedEventId)
   function openEvent(id) { setSelectedEventId(id); setDetailOpen(true) }
   function go(label) { setActive(label) }
   if (!detailOpen || !event) return <div className="feature-page">
-    <div className="feature-head"><div><p className="eyebrow">EVENTS</p><h2>所有活動</h2><span>按下活動，進入活動中心查看資料及使用相關功能。</span></div></div>
+    <div className="feature-head"><div><p className="eyebrow">EVENTS</p><h2>所有活動</h2><span>按下活動，進入活動中心查看資料及使用相關功能。</span></div><button className="primary" onClick={() => setEditing({})}><Plus size={17}/>新增活動</button></div>
     <div className="event-directory">{data.events.map(row => {
       const registrations = data.registrations.filter(x => x.event_id === row.id)
       const people = registrations.reduce((sum, x) => sum + Number(x.guest_count || 0) + 1, 0)
-      return <button className="card event-directory-card" key={row.id} onClick={() => openEvent(row.id)}><div><span className="status">{row.status}</span><h3>{row.title}</h3><p>{fmtDate(row.starts_at)} · {row.venue || '地點待定'}</p></div><strong>{people}<small>參加人數</small></strong></button>
+      return <article className="card event-directory-card" key={row.id} onClick={() => openEvent(row.id)}><div><span className="status">{row.status}</span><h3>{row.title}</h3><p>{fmtDate(row.starts_at)} · {row.venue || '地點待定'}</p><p>{money(row.fee_cents)} · 名額 {row.capacity || 0}</p></div><div className="event-card-side"><strong>{people}<small>參加人數</small></strong><button className="icon-action" title="編輯活動" onClick={e => { e.stopPropagation(); setEditing(row) }}><Pencil size={16}/></button></div></article>
     })}</div>
     {!data.events.length && <article className="card"><p className="empty">暫時未有活動。</p></article>}
+    {editing && <Modal title={editing.id ? '編輯活動' : '新增活動'} close={() => setEditing(null)}><EntityForm table="events" value={editing.id ? editing : null} lookups={data} user={user} close={() => setEditing(null)} refresh={refresh} notify={notify}/></Modal>}
   </div>
   const registrations = data.registrations.filter(x => x.event_id === event.id)
   const people = registrations.reduce((sum, x) => sum + Number(x.guest_count || 0) + 1, 0)
@@ -599,11 +601,12 @@ function EventCenter({ data, selectedEventId, setSelectedEventId, setActive }) {
   const paid = data.payments.filter(p => p.status === 'paid' && registrations.some(r => r.id === p.registration_id)).reduce((sum, p) => sum + Number(p.amount_cents || 0), 0)
   const registrationUrl = `${location.origin}/?register=${event.slug}`
   return <div className="feature-page event-detail-page">
-    <button className="back-button" onClick={() => setDetailOpen(false)}><ArrowLeft size={17}/>返回所有活動</button>
-    <section className="event-detail-hero"><div><span className="status">{event.status}</span><h2>{event.title}</h2><p><CalendarDays size={16}/>{fmtDate(event.starts_at)} · {event.venue || '地點待定'}</p><p>{event.description || '暫時未有活動簡介。'}</p></div><div className="event-detail-number"><strong>{people}</strong><span>/ {event.capacity || 0} 人</span><small>現有參加人數</small></div></section>
+    <div className="event-detail-top"><button className="back-button" onClick={() => setDetailOpen(false)}><ArrowLeft size={17}/>返回所有活動</button><button className="secondary" onClick={() => setEditing(event)}><Pencil size={16}/>編輯活動資料</button></div>
+    <section className="event-detail-hero"><div><span className="status">{event.status}</span><h2>{event.title}</h2><p><CalendarDays size={16}/>{fmtDate(event.starts_at)} · {event.venue || '地點待定'}</p><p>{event.description || '暫時未有活動簡介。'}</p><div className="event-meta"><span>活動費用：{money(event.fee_cents)}</span><span>截止報名：{fmtDate(event.registration_deadline)}</span><span>活動狀態：{event.status}</span></div></div><div className="event-detail-number"><strong>{people}</strong><span>/ {event.capacity || 0} 人</span><small>現有參加人數</small></div></section>
     <div className="stat-grid mini-stats"><article className="stat-card"><div><p>報名紀錄</p><strong>{registrations.length}</strong></div></article><article className="stat-card"><div><p>通告數目</p><strong>{notices.length}</strong></div></article><article className="stat-card"><div><p>已收款</p><strong>{money(paid)}</strong></div></article></div>
     <div className="event-detail-grid"><article className="card event-qr-card"><p className="eyebrow">REGISTRATION QR CODE</p><h3>活動報名 QR Code</h3><QrPanel value={registrationUrl}/></article><article className="card"><p className="eyebrow">ANNOUNCEMENTS</p><h3>活動通告</h3><div className="detail-notices">{notices.length ? notices.map(row => <div key={row.id}><b>{row.subject}</b><span>{fmtDate(row.sent_at || row.created_at)} · {row.status}</span></div>) : <p className="empty">此活動尚未有通告。</p>}</div></article></div>
     <article className="card event-function-card"><p className="eyebrow">EVENT FUNCTIONS</p><h3>活動功能</h3><div className="event-function-buttons"><button onClick={() => go('參加者')}><Users size={18}/>參加者</button><button onClick={() => go('點名')}><ClipboardCheck size={18}/>點名</button><button onClick={() => go('通告發佈')}><BellRing size={18}/>通告發佈</button><button onClick={() => go('付款')}><WalletCards size={18}/>付款</button><button onClick={() => go('報表')}><ChartNoAxesColumnIncreasing size={18}/>報表</button><button onClick={() => go('報名設定')}><FileText size={18}/>報名設定</button></div></article>
+    {editing && <Modal title="編輯活動" close={() => setEditing(null)}><EntityForm table="events" value={editing} lookups={data} user={user} close={() => setEditing(null)} refresh={refresh} notify={notify}/></Modal>}
   </div>
 }
 
@@ -727,7 +730,7 @@ function App() {
   const table = pageTable[active]
   return <div className="app-shell"><Sidebar open={menu} close={() => setMenu(false)} active={active} setActive={setActive} profile={profile}/><main>
     <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● 雲端已同步</span><button className="top-logout" onClick={()=>{sessionStorage.removeItem('eventflow_authenticated');supabase.auth.signOut()}}><LogOut size={16}/>登出</button></div></header>
-    <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '活動管理' ? <EventCenter data={data} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId} setActive={setActive}/> : active === '參加者' ? <ParticipantBoard data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '報表' ? <Reports data={data} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '會員名錄' ? <MemberDirectory data={data} user={session.user} profile={profile} refresh={refresh} notify={notify}/> : active === '點名' ? <AttendanceBoard data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '通告發佈' ? <NoticePublisher data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '付款' ? <PaymentBoard data={data} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '用戶及權限' ? <UserAdministration data={data} user={session.user} refresh={refresh} notify={notify}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
+    <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '活動管理' ? <EventCenter data={data} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId} setActive={setActive} user={session.user} refresh={refresh} notify={notify}/> : active === '參加者' ? <ParticipantBoard data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '報表' ? <Reports data={data} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '會員名錄' ? <MemberDirectory data={data} user={session.user} profile={profile} refresh={refresh} notify={notify}/> : active === '點名' ? <AttendanceBoard data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '通告發佈' ? <NoticePublisher data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '付款' ? <PaymentBoard data={data} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '用戶及權限' ? <UserAdministration data={data} user={session.user} refresh={refresh} notify={notify}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
     <Toast toast={toast}/>
   </main></div>
 }
