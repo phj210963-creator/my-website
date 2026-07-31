@@ -281,17 +281,83 @@ function MemberDirectory({ data, user, profile, refresh, notify }) {
   </div>
 }
 
-function printDocument(title) {
-  const original = document.title
-  document.title = title
-  window.print()
-  setTimeout(() => { document.title = original }, 500)
+function prepareExportNode(targetId) {
+  const source = document.getElementById(targetId)
+  if (!source) throw new Error('找不到需要輸出的表格。')
+  const host = document.createElement('div')
+  host.className = 'export-render-host'
+  const clone = source.cloneNode(true)
+  clone.removeAttribute('id')
+  clone.classList.add('export-render')
+  clone.querySelectorAll('.print-hide,.screen-checkin').forEach(node => node.remove())
+  host.appendChild(clone)
+  document.body.appendChild(host)
+  return host
 }
 
-function PrintActions({ title }) {
+function printDocument(title, targetId) {
+  const host = prepareExportNode(targetId)
+  const frame = document.createElement('iframe')
+  frame.className = 'print-frame'
+  document.body.appendChild(frame)
+  const doc = frame.contentDocument
+  doc.open()
+  doc.write(`<!doctype html><html lang="zh-HK"><head><meta charset="utf-8"><title>${title}</title><style>
+    @page{size:A4 landscape;margin:12mm}*{box-sizing:border-box}body{margin:0;color:#172f2a;font-family:"Microsoft JhengHei","PingFang HK",Arial,sans-serif}
+    h1{font-size:22px;margin:0 0 7px}.print-heading{display:block;border-bottom:2px solid #174f45;padding-bottom:10px;margin-bottom:15px}.print-heading p,.print-heading b{font-size:11px}
+    .card{border:0}.table-scroll{overflow:visible}.directory-table,.print-attendance-table table{width:100%;min-width:0;border-collapse:collapse;font-size:9px}
+    th,td{padding:7px 6px;border:1px solid #82928d;text-align:left;vertical-align:top}th{background:#edf3f1}td b,td small{display:block}td small{margin-top:3px;color:#526762}
+    .print-attendance-table{display:block}.status{border:0;padding:0;background:none}.empty{text-align:center;padding:30px}
+  </style></head><body>${host.innerHTML}</body></html>`)
+  doc.close()
+  host.remove()
+  setTimeout(() => {
+    frame.contentWindow.focus()
+    frame.contentWindow.print()
+    setTimeout(() => frame.remove(), 1000)
+  }, 150)
+}
+
+async function downloadDocumentPdf(title, targetId) {
+  if (!window.html2canvas || !window.jspdf?.jsPDF) throw new Error('PDF 元件尚未載入，請重新整理頁面後再試。')
+  const host = prepareExportNode(targetId)
+  try {
+    await document.fonts?.ready
+    const canvas = await window.html2canvas(host.firstElementChild, { scale: 2, backgroundColor: '#ffffff', useCORS: true })
+    const { jsPDF } = window.jspdf
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true })
+    const pageWidth = 277
+    const pageHeight = 186
+    const pxPerPage = Math.floor(canvas.width * pageHeight / pageWidth)
+    let offset = 0
+    while (offset < canvas.height) {
+      const sliceHeight = Math.min(pxPerPage, canvas.height - offset)
+      const pageCanvas = document.createElement('canvas')
+      pageCanvas.width = canvas.width
+      pageCanvas.height = sliceHeight
+      pageCanvas.getContext('2d').drawImage(canvas, 0, offset, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight)
+      if (offset > 0) pdf.addPage('a4', 'landscape')
+      const renderedHeight = sliceHeight * pageWidth / canvas.width
+      pdf.addImage(pageCanvas.toDataURL('image/jpeg', .94), 'JPEG', 10, 10, pageWidth, renderedHeight, undefined, 'FAST')
+      offset += sliceHeight
+    }
+    pdf.save(`${title}.pdf`)
+  } finally {
+    host.remove()
+  }
+}
+
+function PrintActions({ title, targetId, notify }) {
+  const [exporting, setExporting] = useState(false)
+  async function pdf() {
+    setExporting(true)
+    try { await downloadDocumentPdf(title, targetId); notify?.('PDF 檔案已生成並開始下載') }
+    catch (err) { notify?.(err.message, 'error') }
+    finally { setExporting(false) }
+  }
   return <div className="print-actions print-hide">
-    <button className="secondary" onClick={() => printDocument(title)}><Printer size={17}/>列印紙張</button>
-    <button className="secondary" onClick={() => printDocument(title)}><Download size={17}/>輸出 PDF</button>
+    <button className="secondary" onClick={() => printDocument(title, targetId)}><Printer size={17}/>列印紙張</button>
+    <button className="secondary" disabled={exporting} onClick={pdf}><Download size={17}/>{exporting ? '正在生成…' : '下載 PDF'}</button>
   </div>
 }
 
@@ -301,9 +367,9 @@ function ParticipantBoard({ data, user, refresh, notify, selectedEventId, setSel
   const event = data.events.find(x => x.id === eventId)
   const rows = data.registrations.filter(x => x.event_id === eventId)
   return <div className="feature-page participant-page">
-    <div className="feature-head"><div><p className="eyebrow">PARTICIPANTS</p><h2>活動參加者名單</h2><span>選擇活動後查看、列印或輸出該活動的參加者名單。</span></div><div className="feature-head-actions"><PrintActions title={`${event?.title || '活動'}-參加者名單`}/><button className="primary print-hide" onClick={() => setEditing({})}><Plus size={17}/>新增參加者</button></div></div>
+    <div className="feature-head"><div><p className="eyebrow">PARTICIPANTS</p><h2>活動參加者名單</h2><span>選擇活動後查看、列印或輸出該活動的參加者名單。</span></div><div className="feature-head-actions"><PrintActions title={`${event?.title || '活動'}-參加者名單`} targetId="participant-export-sheet" notify={notify}/><button className="primary print-hide" onClick={() => setEditing({})}><Plus size={17}/>新增參加者</button></div></div>
     <label className="report-filter print-hide">選擇活動<select value={eventId} onChange={e => setSelectedEventId(e.target.value)}>{data.events.map(x => <option key={x.id} value={x.id}>{x.title}</option>)}</select></label>
-    <section className="print-sheet">
+    <section className="print-sheet" id="participant-export-sheet">
       <div className="print-heading"><h1>{event?.title || '活動參加者名單'}</h1><p>{event ? `${fmtDate(event.starts_at)} · ${event.venue || '地點待定'}` : ''}</p><b>參加人數：{rows.reduce((sum, row) => sum + Number(row.guest_count || 0) + 1, 0)} 人</b></div>
       <article className="card directory-card"><div className="table-scroll"><table className="directory-table printable-table"><thead><tr><th>#</th><th>參加者姓名</th><th>電郵</th><th>電話</th><th>機構</th><th>同行</th><th>報名狀態</th><th className="print-hide">操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.id}><td>{index + 1}</td><td><b>{row.attendee_name_zh || '—'}</b><small>{row.attendee_name_en || row.profiles?.full_name || '—'}</small></td><td>{row.attendee_email || row.profiles?.email || '—'}</td><td>{row.attendee_phone || '—'}</td><td>{row.organization || '—'}</td><td>{row.guest_count || 0}</td><td><span className="status">{row.status}</span></td><td className="print-hide"><button className="icon-action" onClick={() => setEditing(row)}><Pencil size={16}/></button></td></tr>)}</tbody></table></div>{!rows.length && <p className="empty">這個活動暫時未有報名紀錄。</p>}</article>
     </section>
@@ -323,9 +389,9 @@ function AttendanceBoard({ data, user, refresh, notify, selectedEventId, setSele
       : await supabase.from('attendance').insert({ registration_id: row.id, checked_in_by: user.id, method: 'manual' })
     if (result.error) notify(result.error.message, 'error'); else { notify(current ? '已取消點名' : '已完成點名'); refresh() }
   }
-  return <div className="feature-page attendance-page"><div className="feature-head"><div><p className="eyebrow">ATTENDANCE</p><h2>活動點名表</h2><span>選擇活動後進行即場點名或列印完整點名表。</span></div><PrintActions title={`${event?.title || '活動'}-點名表`}/></div>
+  return <div className="feature-page attendance-page"><div className="feature-head"><div><p className="eyebrow">ATTENDANCE</p><h2>活動點名表</h2><span>選擇活動後進行即場點名或列印完整點名表。</span></div><PrintActions title={`${event?.title || '活動'}-點名表`} targetId="attendance-export-sheet" notify={notify}/></div>
     <label className="report-filter print-hide">選擇活動<select value={eventId} onChange={e => setSelectedEventId(e.target.value)}>{data.events.map(x => <option key={x.id} value={x.id}>{x.title}</option>)}</select></label>
-    <section className="print-sheet"><div className="print-heading"><h1>{event?.title || '活動點名表'}</h1><p>{event ? `${fmtDate(event.starts_at)} · ${event.venue || '地點待定'}` : ''}</p><b>報名紀錄：{rows.length}　已點名：{rows.filter(row => checked.has(row.id)).length}</b></div>
+    <section className="print-sheet" id="attendance-export-sheet"><div className="print-heading"><h1>{event?.title || '活動點名表'}</h1><p>{event ? `${fmtDate(event.starts_at)} · ${event.venue || '地點待定'}` : ''}</p><b>報名紀錄：{rows.length}　已點名：{rows.filter(row => checked.has(row.id)).length}</b></div>
       <article className="card checkin-list screen-checkin">{rows.length ? rows.map(row => { const name = row.attendee_name_zh || row.attendee_name_en || row.profiles?.full_name || row.profiles?.email || '參加者'; const done = checked.has(row.id); const paid = data.payments.some(p => p.registration_id === row.id && p.status === 'paid'); return <div className="checkin-row" key={row.id}><span className="avatar">{name.slice(0,1)}</span><div><b>{name}</b><small>{row.attendee_name_en || '—'} · {row.attendee_phone || '沒有電話'}</small></div><span className={`payment-pill ${paid ? 'paid' : ''}`}>{paid ? '已付款' : '待付款'}</span><button className={done ? 'checked-button' : 'primary'} onClick={() => toggle(row)}>{done ? <><Check size={16}/>已點名</> : '點名'}</button></div>}) : <p className="empty">這個活動暫時未有報名紀錄。</p>}</article>
       <article className="print-attendance-table"><table><thead><tr><th>#</th><th>中文姓名</th><th>英文姓名</th><th>電話</th><th>電郵</th><th>付款</th><th>出席</th><th>簽署／備註</th></tr></thead><tbody>{rows.map((row, index) => { const paid = data.payments.some(p => p.registration_id === row.id && p.status === 'paid'); return <tr key={row.id}><td>{index + 1}</td><td>{row.attendee_name_zh || '—'}</td><td>{row.attendee_name_en || row.profiles?.full_name || '—'}</td><td>{row.attendee_phone || '—'}</td><td>{row.attendee_email || row.profiles?.email || '—'}</td><td>{paid ? '已付' : '未付'}</td><td>{checked.has(row.id) ? '✓' : '□'}</td><td></td></tr>})}</tbody></table></article>
     </section>
