@@ -44,6 +44,80 @@ const fmtDate = value => value ? new Date(value).toLocaleString('zh-HK') : '—'
 const money = cents => `HK$ ${(Number(cents || 0) / 100).toFixed(2)}`
 const clean = obj => Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== '' && v !== null && v !== undefined))
 
+const memberCsvColumns = [
+  ['會員編號', 'membership_number'], ['中文姓名', 'name_zh'], ['英文姓名', 'name_en'],
+  ['電郵', 'email'], ['電話', 'phone'], ['公司／機構', 'organization'], ['職位', 'title'],
+  ['加入日期', 'joined_on'], ['到期日', 'expires_on'], ['會員狀態', 'member_status'], ['備註', 'notes'],
+]
+
+function csvCell(value) {
+  const text = String(value ?? '')
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
+}
+
+function parseCsv(text) {
+  const rows = []; let row = []; let cell = ''; let quoted = false
+  const source = String(text || '').replace(/^\uFEFF/, '')
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i]
+    if (quoted) {
+      if (char === '"' && source[i + 1] === '"') { cell += '"'; i += 1 }
+      else if (char === '"') quoted = false
+      else cell += char
+    } else if (char === '"') quoted = true
+    else if (char === ',') { row.push(cell); cell = '' }
+    else if (char === '\n') { row.push(cell.replace(/\r$/, '')); rows.push(row); row = []; cell = '' }
+    else cell += char
+  }
+  if (quoted) throw new Error('CSV 內有未完成的引號。')
+  if (cell || row.length) { row.push(cell.replace(/\r$/, '')); rows.push(row) }
+  return rows.filter(values => values.some(value => value.trim() !== ''))
+}
+
+function downloadMemberTemplate() {
+  const header = memberCsvColumns.map(([label]) => csvCell(label)).join(',')
+  const blob = new Blob([`\uFEFF${header}\r\n`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob); const link = document.createElement('a')
+  link.href = url; link.download = 'EventFlow-member-import-template.csv'; link.click(); URL.revokeObjectURL(url)
+}
+
+function normaliseMemberCsv(text, existingMembers) {
+  const rows = parseCsv(text)
+  if (rows.length < 2) throw new Error('CSV 沒有會員資料。請保留標題列，並由第二列開始輸入會員。')
+  const aliases = {
+    membership_number: ['會員編號', 'membership_number'], name_zh: ['中文姓名', 'name_zh'], name_en: ['英文姓名', 'name_en'],
+    email: ['電郵', '電子郵件', 'email'], phone: ['電話', 'phone'], organization: ['公司／機構', '公司/機構', '機構', 'organization'],
+    title: ['職位', 'title'], joined_on: ['加入日期', 'joined_on'], expires_on: ['到期日', 'expires_on'],
+    member_status: ['會員狀態', 'member_status'], notes: ['備註', 'notes'],
+  }
+  const headers = rows[0].map(value => value.trim().toLowerCase())
+  const indexes = Object.fromEntries(Object.entries(aliases).map(([key, names]) => [key, headers.findIndex(header => names.some(name => header === name.toLowerCase()))]))
+  const missing = ['membership_number', 'name_zh', 'name_en', 'email'].filter(key => indexes[key] < 0)
+  if (missing.length) throw new Error(`CSV 缺少必要欄位：${missing.map(key => memberCsvColumns.find(([, field]) => field === key)?.[0]).join('、')}`)
+  const existing = new Set(existingMembers.map(item => String(item.membership_number || '').trim().toLowerCase()))
+  const seen = new Set(); const valid = []; const errors = []
+  const statusMap = { active: 'active', '有效': 'active', pending: 'pending', '待確認': 'pending', inactive: 'inactive', '停用': 'inactive' }
+  const dateOk = value => !value || (/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00`)))
+  rows.slice(1).forEach((values, offset) => {
+    const get = key => indexes[key] < 0 ? '' : String(values[indexes[key]] || '').trim()
+    const number = get('membership_number'); const statusInput = get('member_status') || 'active'; const status = statusMap[statusInput.toLowerCase()] || statusMap[statusInput]
+    const problems = []
+    if (!number) problems.push('會員編號不可留空')
+    if (!get('name_zh')) problems.push('中文姓名不可留空')
+    if (!get('name_en')) problems.push('英文姓名不可留空')
+    if (!get('email') || !/^\S+@\S+\.\S+$/.test(get('email'))) problems.push('電郵格式不正確')
+    if (existing.has(number.toLowerCase())) problems.push('會員編號已存在')
+    if (seen.has(number.toLowerCase())) problems.push('CSV 內會員編號重複')
+    if (!status) problems.push('會員狀態只可填有效、待確認、停用、active、pending 或 inactive')
+    if (!dateOk(get('joined_on'))) problems.push('加入日期須為 YYYY-MM-DD')
+    if (!dateOk(get('expires_on'))) problems.push('到期日須為 YYYY-MM-DD')
+    seen.add(number.toLowerCase())
+    if (problems.length) errors.push({ line: offset + 2, number: number || '—', message: problems.join('；') })
+    else valid.push(clean({ membership_number: number, name_zh: get('name_zh'), name_en: get('name_en'), email: get('email'), phone: get('phone'), organization: get('organization'), title: get('title'), joined_on: get('joined_on') || new Date().toISOString().slice(0, 10), expires_on: get('expires_on'), member_status: status, notes: get('notes') }))
+  })
+  return { valid, errors, total: rows.length - 1 }
+}
+
 function Login() {
   const [form, setForm] = useState({ email: '', password: '' })
   const [message, setMessage] = useState('')
@@ -269,15 +343,39 @@ function Dashboard({ data, setActive }) {
 function MemberDirectory({ data, user, profile, refresh, notify }) {
   const [editing, setEditing] = useState(null)
   const [search, setSearch] = useState('')
+  const [csvImport, setCsvImport] = useState(null)
+  const [csvBusy, setCsvBusy] = useState(false)
+  const csvInput = useRef(null)
   const rows = data.members.filter(row => JSON.stringify(row).toLowerCase().includes(search.toLowerCase()))
   const active = data.members.filter(row => row.member_status === 'active').length
+  async function selectCsv(file) {
+    if (!file) return
+    try {
+      if (!file.name.toLowerCase().endsWith('.csv')) throw new Error('請選擇 CSV 檔案。')
+      const result = normaliseMemberCsv(await file.text(), data.members)
+      setCsvImport({ fileName: file.name, ...result })
+    } catch (error) { notify(error.message || '無法讀取 CSV。', 'error') }
+  }
+  async function importCsv() {
+    if (!csvImport?.valid.length) return
+    setCsvBusy(true)
+    try {
+      for (let index = 0; index < csvImport.valid.length; index += 200) {
+        const { error } = await supabase.from('members').insert(csvImport.valid.slice(index, index + 200))
+        if (error) throw error
+      }
+      await refresh(); notify(`已成功匯入 ${csvImport.valid.length} 位會員。`); setCsvImport(null)
+    } catch (error) { notify(`CSV 匯入失敗：${error.message}`, 'error') }
+    finally { setCsvBusy(false) }
+  }
   return <div className="feature-page">
-    <div className="feature-head"><div><p className="eyebrow">MEMBER DATABASE</p><h2>會員名錄</h2><span>會員資料可獨立建立，不需要先開設登入帳戶。</span></div><button className="primary" onClick={() => setEditing({})}><Plus size={17}/>新增會員</button></div>
+    <div className="feature-head"><div><p className="eyebrow">MEMBER DATABASE</p><h2>會員名錄</h2><span>會員資料可獨立建立，不需要先開設登入帳戶。</span></div><div className="feature-head-actions member-import-actions"><button className="secondary" onClick={downloadMemberTemplate}><Download size={17}/>下載 CSV 範本</button><button className="secondary" onClick={() => csvInput.current?.click()}><Upload size={17}/>CSV 批量匯入</button><input ref={csvInput} className="file-picker" type="file" accept=".csv,text/csv" onChange={e => { selectCsv(e.target.files?.[0]); e.target.value = '' }}/><button className="primary" onClick={() => setEditing({})}><Plus size={17}/>新增會員</button></div></div>
     <div className="stat-grid mini-stats"><article className="stat-card"><span className="icon-box green"><Users size={20}/></span><div><p>會員總數</p><strong>{data.members.length}</strong></div></article><article className="stat-card"><span className="icon-box blue"><Check size={20}/></span><div><p>有效會員</p><strong>{active}</strong></div></article><article className="stat-card"><span className="icon-box orange"><UserPlus size={20}/></span><div><p>待確認資料</p><strong>{data.members.filter(x => x.member_status === 'pending').length}</strong></div></article></div>
     <article className="card directory-card"><div className="manager-actions"><label className="mini-search"><Search size={15}/><input placeholder="搜尋姓名、公司、電郵或會員編號..." value={search} onChange={e => setSearch(e.target.value)}/></label></div>
       <div className="table-scroll"><table className="directory-table"><thead><tr><th>會員</th><th>公司及職位</th><th>聯絡資料</th><th>入會日期</th><th>狀態</th><th>操作</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td><b>{row.name_zh || row.profiles?.full_name_zh || '—'}</b><small>{row.name_en || row.profiles?.full_name_en || row.profiles?.full_name || '—'} · {row.membership_number}</small></td><td>{row.organization || '—'}<small>{row.title || '—'}</small></td><td>{row.phone || row.profiles?.phone || '—'}<small>{row.email || row.profiles?.email || '—'}</small></td><td>{row.joined_on || '—'}</td><td><span className="status">{row.member_status === 'active' ? '有效' : row.member_status === 'pending' ? '待確認' : '停用'}</span></td><td><button className="icon-action" onClick={() => setEditing(row)}><Pencil size={16}/></button></td></tr>)}</tbody></table></div>
     </article>
     {editing && <Modal title={editing.id ? '編輯會員' : '新增會員'} close={() => setEditing(null)}><EntityForm table="members" value={editing.id ? editing : null} lookups={data} user={user} close={() => setEditing(null)} refresh={refresh} notify={notify}/></Modal>}
+    {csvImport && <Modal title="CSV 批量匯入預覽" close={() => !csvBusy && setCsvImport(null)}><div className="csv-import-summary"><div className="upload-success"><Check size={17}/><span><b>已讀取 CSV 檔案</b><small>{csvImport.fileName}</small></span></div><div className="csv-import-counts"><article><strong>{csvImport.total}</strong><span>資料列</span></article><article className="success"><strong>{csvImport.valid.length}</strong><span>可匯入</span></article><article className={csvImport.errors.length ? 'warning' : ''}><strong>{csvImport.errors.length}</strong><span>需修正／略過</span></article></div>{csvImport.errors.length > 0 && <div className="csv-errors"><b>以下資料不會匯入：</b>{csvImport.errors.slice(0, 12).map(error => <p key={`${error.line}-${error.number}`}><strong>第 {error.line} 列（{error.number}）</strong>{error.message}</p>)}{csvImport.errors.length > 12 && <small>另外還有 {csvImport.errors.length - 12} 項錯誤，請修正 CSV 後再試。</small>}</div>}<small className="csv-hint">現有會員編號不會被覆蓋；有錯誤的資料列會略過，其餘有效資料可繼續匯入。</small><div className="notice-actions"><button className="secondary" disabled={csvBusy} onClick={() => setCsvImport(null)}>取消</button><button className="primary" disabled={csvBusy || !csvImport.valid.length} onClick={importCsv}>{csvBusy ? '匯入中…' : `確認匯入 ${csvImport.valid.length} 位會員`}</button></div></div></Modal>}
   </div>
 }
 
