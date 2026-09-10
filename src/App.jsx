@@ -43,6 +43,7 @@ const pageInfo = {
 const fmtDate = value => value ? new Date(value).toLocaleString('zh-HK') : '—'
 const money = cents => `HK$ ${(Number(cents || 0) / 100).toFixed(2)}`
 const clean = obj => Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== '' && v !== null && v !== undefined))
+const registrationLink = slug => `${location.origin}/?register=${encodeURIComponent(String(slug || ''))}`
 
 const memberCsvColumns = [
   ['會員編號', 'membership_number'], ['中文姓名', 'name_zh'], ['英文姓名', 'name_en'],
@@ -281,7 +282,7 @@ function EntityForm({ table, value, lookups, user, close, refresh, notify }) {
         if (!value) payload.slug = `${form.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-')}-${Date.now()}`
         if (form.poster) {
           const slug = payload.slug || value.slug
-          const poster = await addQrToPoster(form.poster, `${location.origin}/?register=${slug}`)
+          const poster = await addQrToPoster(form.poster, registrationLink(slug))
           payload.poster_path = await upload('event-posters', poster)
         }
       } else if (table === 'announcements') payload = clean({ event_id: form.event_id, subject: form.subject, body_html: form.body_html, status: form.status, scheduled_for: form.scheduled_for, sent_at: form.status === 'sent' ? new Date().toISOString() : null, created_by: user.id })
@@ -526,7 +527,7 @@ function NoticePublisher({ data, user, refresh, notify, selectedEventId, setSele
   const [file, setFile] = useState(null), [generated, setGenerated] = useState(null), [preview, setPreview] = useState(''), [busy, setBusy] = useState(false)
   const [dragActive, setDragActive] = useState(false), [uploadError, setUploadError] = useState('')
   const event = data.events.find(x => x.id === eventId)
-  const registrationUrl = event ? `${location.origin}/?register=${event.slug}` : ''
+  const registrationUrl = event ? registrationLink(event.slug) : ''
   const recipients = data.members.filter(x => x.member_status !== 'inactive').map(x => x.email || x.profiles?.email).filter(Boolean)
   const sendHistory = data.email_send_logs.filter(x => x.event_id === eventId)
   async function generate() {
@@ -663,7 +664,7 @@ function Manager({ table, rows, lookups, user, refresh, notify, profile }) {
     if (error) notify(error.message, 'error'); else { notify('已刪除', 'success'); refresh() }
   }
   function qr(row) {
-    const url = table === 'events' ? `${location.origin}/?register=${row.slug}` : `${location.origin}/?checkin=${row.qr_token}`
+    const url = table === 'events' ? registrationLink(row.slug) : `${location.origin}/?checkin=${encodeURIComponent(String(row.qr_token || ''))}`
     setEditing({ qr: true, url, title: row.events?.title || row.title || 'EventFlow QR Code' })
   }
   function emailAnnouncement(row) {
@@ -684,10 +685,27 @@ function Manager({ table, rows, lookups, user, refresh, notify, profile }) {
 }
 
 function QrPanel({ value }) {
-  const ref = element => {
-    if (element && window.QRCode) { element.innerHTML = ''; new window.QRCode(element, { text: value, width: 220, height: 220 }) }
-  }
-  return <div className="qr-panel"><div ref={ref}/><p>{value}</p><button className="secondary" onClick={() => navigator.clipboard.writeText(value)}>複製連結</button></div>
+  const holder = useRef(null)
+  const [qrError, setQrError] = useState('')
+  useEffect(() => {
+    const element = holder.current
+    if (!element) return
+    element.innerHTML = ''
+    setQrError('')
+    if (!value || !window.QRCode) {
+      setQrError('暫時未能載入 QR Code，請使用下方報名連結。')
+      return
+    }
+    try {
+      new window.QRCode(element, { text: String(value), width: 220, height: 220 })
+    } catch (error) {
+      console.error('[EventFlow] QR Code generation failed', error)
+      element.innerHTML = ''
+      setQrError('未能產生 QR Code，請使用下方報名連結。')
+    }
+    return () => { element.innerHTML = '' }
+  }, [value])
+  return <div className="qr-panel"><div className="qr-code-canvas" ref={holder}/>{qrError && <div className="form-message">{qrError}</div>}<p>{value}</p><div className="qr-link-actions"><button className="secondary" onClick={() => navigator.clipboard.writeText(value)}>複製連結</button>{qrError && <a className="secondary" href={value} target="_blank" rel="noreferrer">開啟報名頁</a>}</div></div>
 }
 
 function EventCenter({ data, selectedEventId, setSelectedEventId, setActive, user, refresh, notify }) {
@@ -714,7 +732,7 @@ function EventCenter({ data, selectedEventId, setSelectedEventId, setActive, use
   const pending = registrations.filter(x => x.status === 'pending').length
   const notices = data.announcements.filter(x => x.event_id === event.id)
   const paid = data.payments.filter(p => p.status === 'paid' && registrations.some(r => r.id === p.registration_id)).reduce((sum, p) => sum + Number(p.amount_cents || 0), 0)
-  const registrationUrl = `${location.origin}/?register=${event.slug}`
+  const registrationUrl = registrationLink(event.slug)
   return <div className="feature-page event-detail-page">
     <div className="event-detail-top"><button className="back-button" onClick={() => setDetailOpen(false)}><ArrowLeft size={17}/>返回所有活動</button><button className="secondary" onClick={() => setEditing(event)}><Pencil size={16}/>編輯活動資料</button></div>
     <section className="event-detail-hero"><div><span className="status">{event.status}</span><h2>{event.title}</h2><p><CalendarDays size={16}/>{fmtDate(event.starts_at)} · {event.venue || '地點待定'}</p><p>{event.description || '暫時未有活動簡介。'}</p><div className="event-meta"><span>活動費用：{money(event.fee_cents)}</span><span>截止報名：{fmtDate(event.registration_deadline)}</span><span>活動狀態：{event.status}</span></div></div><div className="event-detail-number"><strong>{people}</strong><span>/ {event.capacity || 0} 人</span><small>現有參加人數</small></div></section>
