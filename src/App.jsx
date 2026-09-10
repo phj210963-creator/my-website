@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   BellRing, CalendarDays, ChartNoAxesColumnIncreasing, Check, ClipboardCheck,
   ArrowLeft, Download, FileText, Gauge, LogOut, Mail, Menu, Pencil, Plus, Printer, QrCode,
-  Search, ShieldCheck, Trash2, Upload, UserPlus, Users, WalletCards, X,
+  RefreshCw, Search, ShieldCheck, Trash2, Upload, UserPlus, Users, WalletCards, X,
 } from 'lucide-react'
 import { isConfigured, supabase } from './supabase'
 
@@ -820,6 +820,8 @@ function App() {
   const [accessIssue, setAccessIssue] = useState('')
   const [data, setData] = useState({ events: [], profiles: [], registrations: [], members: [], attendance: [], payments: [], announcements: [], registration_settings: [], email_send_logs: [], user_invitations: [] })
   const [toast, setToast] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshInFlight = useRef(false)
   const notify = (text, type = 'success') => { setToast({ text, type }); setTimeout(() => setToast(null), 3500) }
   useEffect(() => {
     if (!isConfigured) { setChecking(false); return }
@@ -831,39 +833,52 @@ function App() {
     return () => data.subscription.unsubscribe()
   }, [])
   async function refresh() {
-    if (!session) return
-    setAccessIssue('')
-    let currentProfile = null, profileError = null
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const result = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()
-      currentProfile = result.data; profileError = result.error
-      if (currentProfile || profileError) break
-      await new Promise(resolve => setTimeout(resolve, 300))
+    if (!session || refreshInFlight.current) return
+    refreshInFlight.current = true; setRefreshing(true)
+    try {
+      setAccessIssue('')
+      let currentProfile = null, profileError = null
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()
+        currentProfile = result.data; profileError = result.error
+        if (currentProfile || profileError) break
+        await new Promise(resolve => setTimeout(resolve, 300))
+      }
+      if (profileError) { setAccessIssue(`未能讀取用戶資料：${profileError.message}`); return }
+      if (!currentProfile) { setAccessIssue(`找不到 ${session.user.email} 的用戶資料。請管理員檢查「用戶及權限」記錄。`); return }
+      if (!['admin','staff'].includes(currentProfile.role) || currentProfile.status !== 'active') {
+        setProfile(currentProfile)
+        setAccessIssue(`帳戶已登入，但後台權限資料不正確。現在角色：${currentProfile.role || '未設定'}；狀態：${currentProfile.status || '未設定'}。請管理員把角色設定為 User 或程式管理員，並把狀態設定為 active。`)
+        return
+      }
+      const queries = await Promise.all([
+        supabase.from('events').select('*').order('starts_at'),
+        supabase.from('profiles').select('*').order('full_name'),
+        supabase.from('registrations').select('*, profiles(full_name,full_name_zh,full_name_en,email), events(title,fee_cents)').order('registered_at', { ascending: false }),
+        supabase.from('members').select('*, profiles(full_name,full_name_zh,full_name_en,email,phone)').order('created_at', { ascending: false }),
+        supabase.from('attendance').select('*, registrations(attendee_name_zh,attendee_name_en,profiles(full_name,email),events(title))').order('checked_in_at', { ascending: false }),
+        supabase.from('payments').select('*, profiles(full_name,email), registrations(attendee_name_zh,attendee_name_en,attendee_email)').order('created_at', { ascending: false }),
+        supabase.from('announcements').select('*, events(title)').order('created_at', { ascending: false }),
+        supabase.from('registration_settings').select('*, events(title)').order('updated_at', { ascending: false }),
+        supabase.from('email_send_logs').select('*').order('sent_at', { ascending: false }),
+        currentProfile.role === 'admin' ? supabase.from('user_invitations').select('*').order('created_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
+      ])
+      const next = { events: queries[0].data || [], profiles: queries[1].data || [], registrations: queries[2].data || [], members: queries[3].data || [], attendance: queries[4].data || [], payments: queries[5].data || [], announcements: queries[6].data || [], registration_settings: queries[7].data || [], email_send_logs: queries[8].data || [], user_invitations: queries[9].data || [] }
+      setData(next); setProfile(currentProfile)
+      const err = queries.find(q => q.error)?.error; if (err) notify(err.message, 'error')
+    } finally {
+      refreshInFlight.current = false; setRefreshing(false)
     }
-    if (profileError) { setAccessIssue(`未能讀取用戶資料：${profileError.message}`); return }
-    if (!currentProfile) { setAccessIssue(`找不到 ${session.user.email} 的用戶資料。請管理員檢查「用戶及權限」記錄。`); return }
-    if (!['admin','staff'].includes(currentProfile.role) || currentProfile.status !== 'active') {
-      setProfile(currentProfile)
-      setAccessIssue(`帳戶已登入，但後台權限資料不正確。現在角色：${currentProfile.role || '未設定'}；狀態：${currentProfile.status || '未設定'}。請管理員把角色設定為 User 或程式管理員，並把狀態設定為 active。`)
-      return
-    }
-    const queries = await Promise.all([
-      supabase.from('events').select('*').order('starts_at'),
-      supabase.from('profiles').select('*').order('full_name'),
-      supabase.from('registrations').select('*, profiles(full_name,full_name_zh,full_name_en,email), events(title,fee_cents)').order('registered_at', { ascending: false }),
-      supabase.from('members').select('*, profiles(full_name,full_name_zh,full_name_en,email,phone)').order('created_at', { ascending: false }),
-      supabase.from('attendance').select('*, registrations(attendee_name_zh,attendee_name_en,profiles(full_name,email),events(title))').order('checked_in_at', { ascending: false }),
-      supabase.from('payments').select('*, profiles(full_name,email), registrations(attendee_name_zh,attendee_name_en,attendee_email)').order('created_at', { ascending: false }),
-      supabase.from('announcements').select('*, events(title)').order('created_at', { ascending: false }),
-      supabase.from('registration_settings').select('*, events(title)').order('updated_at', { ascending: false }),
-      supabase.from('email_send_logs').select('*').order('sent_at', { ascending: false }),
-      currentProfile.role === 'admin' ? supabase.from('user_invitations').select('*').order('created_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
-    ])
-    const next = { events: queries[0].data || [], profiles: queries[1].data || [], registrations: queries[2].data || [], members: queries[3].data || [], attendance: queries[4].data || [], payments: queries[5].data || [], announcements: queries[6].data || [], registration_settings: queries[7].data || [], email_send_logs: queries[8].data || [], user_invitations: queries[9].data || [] }
-    setData(next); setProfile(currentProfile)
-    const err = queries.find(q => q.error)?.error; if (err) notify(err.message, 'error')
   }
-  useEffect(() => { refresh() }, [session])
+  useEffect(() => {
+    if (!session) return
+    refresh()
+    const syncVisibleData = () => { if (document.visibilityState === 'visible') refresh() }
+    window.addEventListener('focus', syncVisibleData)
+    document.addEventListener('visibilitychange', syncVisibleData)
+    const timer = window.setInterval(refresh, 30000)
+    return () => { window.removeEventListener('focus', syncVisibleData); document.removeEventListener('visibilitychange', syncVisibleData); window.clearInterval(timer) }
+  }, [session])
   const titleDate = useMemo(() => new Intl.DateTimeFormat('zh-HK', { dateStyle: 'long' }).format(new Date()), [])
   const params = new URLSearchParams(location.search), publicSlug = params.get('register'), inviteToken = params.get('invite')
   if (!isConfigured) return <div className="setup-error">尚未設定 Supabase 環境變數。</div>
@@ -874,7 +889,7 @@ function App() {
   if (accessIssue) return <div className="auth-page"><section className="auth-card access-issue"><div className="auth-brand"><span className="brand-mark">J</span><span><b>聚辦</b><small>EventFlow</small></span></div><h1>帳戶已登入</h1><p>{accessIssue}</p><div className="access-details"><span>登入電郵</span><b>{session.user.email}</b>{profile&&<><span>資料庫角色／狀態</span><b>{profile.role} / {profile.status}</b></>}</div><button className="secondary wide" onClick={()=>refresh()}>重新檢查權限</button><button className="logout-link" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/>登出其他帳戶</button></section></div>
   const table = pageTable[active]
   return <div className="app-shell"><Sidebar open={menu} close={() => setMenu(false)} active={active} setActive={setActive} profile={profile}/><main>
-    <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● 雲端已同步</span><button className="top-logout" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/>登出</button></div></header>
+    <header className="topbar"><button className="menu-button" onClick={() => setMenu(true)}><Menu size={22}/></button><div><p>{titleDate}</p><h1>{active}</h1></div><div className="header-actions"><span className="live-dot">● {refreshing ? '正在同步…' : '雲端已同步'}</span><button className="top-refresh" disabled={refreshing} onClick={refresh}><RefreshCw className={refreshing ? 'spin' : ''} size={16}/>更新資料</button><button className="top-logout" onClick={()=>supabase.auth.signOut()}><LogOut size={16}/>登出</button></div></header>
     <section className="content">{active === '總覽' ? <Dashboard data={data} setActive={setActive}/> : active === '活動管理' ? <EventCenter data={data} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId} setActive={setActive} user={session.user} refresh={refresh} notify={notify}/> : active === '參加者' ? <ParticipantBoard data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '報表' ? <Reports data={data} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '會員名錄' ? <MemberDirectory data={data} user={session.user} profile={profile} refresh={refresh} notify={notify}/> : active === '點名' ? <AttendanceBoard data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '通告發佈' ? <NoticePublisher data={data} user={session.user} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '付款' ? <PaymentBoard data={data} refresh={refresh} notify={notify} selectedEventId={selectedEventId} setSelectedEventId={setSelectedEventId}/> : active === '用戶及權限' ? <UserAdministration data={data} user={session.user} refresh={refresh} notify={notify}/> : <Manager table={table} rows={data[table]} lookups={data} user={session.user} refresh={refresh} notify={notify} profile={profile}/>}</section>
     <Toast toast={toast}/>
   </main></div>
