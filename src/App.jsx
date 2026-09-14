@@ -5,6 +5,7 @@ import {
   RefreshCw, Search, ShieldCheck, Trash2, Upload, UserPlus, Users, WalletCards, X,
 } from 'lucide-react'
 import { isConfigured, supabase } from './supabase'
+import { eventDateTimeInputToIso, formatEventDateTime, toEventDateTimeInput } from './dateTime'
 
 const navItems = [
   [Gauge, '總覽'], [CalendarDays, '活動管理'], [BellRing, '通告發佈'],
@@ -40,7 +41,7 @@ const pageInfo = {
   profiles: ['用戶及權限', '設定管理員、職員及會員權限'],
 }
 
-const fmtDate = value => value ? new Date(value).toLocaleString('zh-HK') : '—'
+const fmtDate = formatEventDateTime
 const money = cents => `HK$ ${(Number(cents || 0) / 100).toFixed(2)}`
 const clean = obj => Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== '' && v !== null && v !== undefined))
 const registrationLink = slug => `${location.origin}/?register=${encodeURIComponent(String(slug || ''))}`
@@ -278,14 +279,14 @@ function EntityForm({ table, value, lookups, user, close, refresh, notify }) {
     try {
       let payload = {}
       if (table === 'events') {
-        payload = clean({ title: form.title, venue: form.venue, starts_at: form.starts_at, ends_at: form.ends_at, registration_deadline: form.registration_deadline, capacity: Number(form.capacity), fee_cents: Math.round(Number(form.fee) * 100), status: form.status, description: form.description, created_by: user.id })
+        payload = { title: form.title, venue: form.venue, starts_at: eventDateTimeInputToIso(form.starts_at), ends_at: eventDateTimeInputToIso(form.ends_at), registration_deadline: eventDateTimeInputToIso(form.registration_deadline), capacity: Number(form.capacity), fee_cents: Math.round(Number(form.fee) * 100), status: form.status, description: form.description, created_by: user.id }
         if (!value) payload.slug = `${form.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-')}-${Date.now()}`
         if (form.poster) {
           const slug = payload.slug || value.slug
           const poster = await addQrToPoster(form.poster, registrationLink(slug))
           payload.poster_path = await upload('event-posters', poster)
         }
-      } else if (table === 'announcements') payload = clean({ event_id: form.event_id, subject: form.subject, body_html: form.body_html, status: form.status, scheduled_for: form.scheduled_for, sent_at: form.status === 'sent' ? new Date().toISOString() : null, created_by: user.id })
+      } else if (table === 'announcements') payload = clean({ event_id: form.event_id, subject: form.subject, body_html: form.body_html, status: form.status, scheduled_for: eventDateTimeInputToIso(form.scheduled_for), sent_at: form.status === 'sent' ? new Date().toISOString() : null, created_by: user.id })
       else if (table === 'registration_settings') payload = { event_id: form.event_id, form_title: form.form_title, instructions: form.instructions, success_message: form.success_message, require_name_zh: Boolean(form.require_name_zh), require_name_en: Boolean(form.require_name_en), require_email: Boolean(form.require_email), require_phone: Boolean(form.require_phone), require_organization: Boolean(form.require_organization), allow_guest: Boolean(form.allow_guest), is_open: Boolean(form.is_open) }
       else if (table === 'registrations') payload = clean({ event_id: form.event_id, profile_id: form.profile_id || null, attendee_name_zh: form.attendee_name_zh, attendee_name_en: form.attendee_name_en, attendee_email: form.attendee_email, attendee_phone: form.attendee_phone, organization: form.organization, status: form.status, guest_count: Number(form.guest_count), special_requirements: form.special_requirements, source: 'admin' })
       else if (table === 'members') payload = clean({ profile_id: form.profile_id || null, name_zh: form.name_zh, name_en: form.name_en, email: form.email, phone: form.phone, membership_number: form.membership_number, organization: form.organization, title: form.title, joined_on: form.joined_on, expires_on: form.expires_on, member_status: form.member_status, notes: form.notes })
@@ -320,11 +321,10 @@ function EntityForm({ table, value, lookups, user, close, refresh, notify }) {
 }
 
 function enumOpts(values) { return values.map(v => ({ value: v, label: v })) }
-function localDate(value) { return value ? new Date(value).toISOString().slice(0, 16) : '' }
 function toForm(table, row) {
-  if (table === 'events') return { ...row, starts_at: localDate(row.starts_at), ends_at: localDate(row.ends_at), registration_deadline: localDate(row.registration_deadline), fee: Number(row.fee_cents || 0) / 100, poster: null }
-  if (table === 'payments') return { ...row, amount: Number(row.amount_cents || 0) / 100, paid_at: localDate(row.paid_at), receipt: null }
-  if (table === 'announcements') return { ...row, scheduled_for: localDate(row.scheduled_for) }
+  if (table === 'events') return { ...row, starts_at: toEventDateTimeInput(row.starts_at), ends_at: toEventDateTimeInput(row.ends_at), registration_deadline: toEventDateTimeInput(row.registration_deadline), fee: Number(row.fee_cents || 0) / 100, poster: null }
+  if (table === 'payments') return { ...row, amount: Number(row.amount_cents || 0) / 100, paid_at: toEventDateTimeInput(row.paid_at), receipt: null }
+  if (table === 'announcements') return { ...row, scheduled_for: toEventDateTimeInput(row.scheduled_for) }
   return { ...row }
 }
 
