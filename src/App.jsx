@@ -464,12 +464,12 @@ function ParticipantBoard({ data, user, refresh, notify, selectedEventId, setSel
   const [editing, setEditing] = useState(null)
   const eventId = selectedEventId || data.events[0]?.id || ''
   const event = data.events.find(x => x.id === eventId)
-  const rows = data.registrations.filter(x => x.event_id === eventId)
+  const rows = data.registrations.filter(x => x.event_id === eventId && x.status !== 'cancelled')
   return <div className="feature-page participant-page">
     <div className="feature-head"><div><p className="eyebrow">PARTICIPANTS</p><h2>活動參加者名單</h2><span>選擇活動後查看、列印或輸出該活動的參加者名單。</span></div><div className="feature-head-actions"><PrintActions title={`${event?.title || '活動'}-參加者名單`} targetId="participant-export-sheet" notify={notify}/><button className="primary print-hide" onClick={() => setEditing({})}><Plus size={17}/>新增參加者</button></div></div>
     <label className="report-filter print-hide">選擇活動<select value={eventId} onChange={e => setSelectedEventId(e.target.value)}>{data.events.map(x => <option key={x.id} value={x.id}>{x.title}</option>)}</select></label>
     <section className="print-sheet" id="participant-export-sheet">
-      <div className="print-heading"><h1>{event?.title || '活動參加者名單'}</h1><p>{event ? `${fmtDate(event.starts_at)} · ${event.venue || '地點待定'}` : ''}</p><b>參加人數：{rows.reduce((sum, row) => sum + Number(row.guest_count || 0) + 1, 0)} 人</b></div>
+      <div className="print-heading"><h1>{event?.title || '活動參加者名單'}</h1><p>{event ? `${fmtDate(event.starts_at)} · ${event.venue || '地點待定'}` : ''}</p><b>參加人數：{rows.length} 人</b></div>
       <article className="card directory-card"><div className="table-scroll"><table className="directory-table printable-table"><thead><tr><th>#</th><th>參加者姓名</th><th>電郵</th><th>電話</th><th>機構</th><th>同行</th><th>報名狀態</th><th className="print-hide">操作</th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.id}><td>{index + 1}</td><td><b>{row.attendee_name_zh || '—'}</b><small>{row.attendee_name_en || row.profiles?.full_name || '—'}</small></td><td>{row.attendee_email || row.profiles?.email || '—'}</td><td>{row.attendee_phone || '—'}</td><td>{row.organization || '—'}</td><td>{row.guest_count || 0}</td><td><span className="status">{row.status}</span></td><td className="print-hide"><button className="icon-action" onClick={() => setEditing(row)}><Pencil size={16}/></button></td></tr>)}</tbody></table></div>{!rows.length && <p className="empty">這個活動暫時未有報名紀錄。</p>}</article>
     </section>
     {editing && <Modal title={editing.id ? '編輯參加者' : '新增參加者'} close={() => setEditing(null)}><EntityForm table="registrations" value={editing.id ? editing : null} lookups={data} user={user} close={() => setEditing(null)} refresh={refresh} notify={notify}/></Modal>}
@@ -479,7 +479,7 @@ function ParticipantBoard({ data, user, refresh, notify, selectedEventId, setSel
 function AttendanceBoard({ data, user, refresh, notify, selectedEventId, setSelectedEventId }) {
   const eventId = selectedEventId || data.events[0]?.id || ''
   const event = data.events.find(x => x.id === eventId)
-  const rows = data.registrations.filter(x => x.event_id === eventId)
+  const rows = data.registrations.filter(x => x.event_id === eventId && x.status !== 'cancelled')
   const checked = new Map(data.attendance.map(x => [x.registration_id, x]))
   async function toggle(row) {
     const current = checked.get(row.id)
